@@ -363,6 +363,11 @@ def _is_empty_signature(val: str) -> bool:
     return False
 
 
+def _normalize_digit_text(t: str) -> str:
+    """将OCR常见误识字符替换为数字，用于小写金额提取"""
+    return t.replace('O', '0').replace('o', '0').replace('l', '1').replace('I', '1')
+
+
 # ================== 本票字段提取 ==================
 def extract_benpiao_fields(text: str, spec_fields, file_path=None):
     """
@@ -823,20 +828,49 @@ def extract_daikuan_fields_v6(file_path):
             amount_upper = m.group(1).strip()
             print(f"[大写金额] {amount_upper}")
 
-        number_region = [b for b in all_boxes if 880 < b['y'] < 1000]
-        number_boxes = [b for b in number_region if re.match(r"^\d+$", b['text'])]
+        # 扩大搜索范围：Y > 800，覆盖整个表格下半部分
+        # 匹配纯数字或含OCR误识字符（如 'O'/'o' 误识为 '0'）的框
+        digit_candidates = []
+        for b in all_boxes:
+            if b['y'] <= 800:
+                continue
+            normalized = _normalize_digit_text(b['text'])
+            if re.match(r'^\d+$', normalized):
+                digit_candidates.append({**b, 'normalized': normalized})
 
-        print(f"[小写金额] 数字框: {[b['text'] for b in sorted(number_boxes, key=lambda x: x['x'])]}")
+        print(f"[小写金额] Y>800 范围内共找到 {len(digit_candidates)} 个数字框：")
+        for d in sorted(digit_candidates, key=lambda x: x['y']):
+            print(f"  text='{d['text']}' normalized='{d['normalized']}' x={d['x']:.0f} y={d['y']:.0f}")
+
+        # 智能Y聚类：找出数字框最密集的Y区间（窗口=40px，覆盖单行格子高度）
+        number_boxes = []
+        if digit_candidates:
+            ys = sorted(set(d['y'] for d in digit_candidates))
+            best_y_center = None
+            best_count = 0
+            y_window = 40
+            for y in ys:
+                group = [d for d in digit_candidates if abs(d['y'] - y) <= y_window]
+                if len(group) > best_count:
+                    best_count = len(group)
+                    best_y_center = y
+
+            if best_y_center is not None:
+                number_boxes = [d for d in digit_candidates if abs(d['y'] - best_y_center) <= y_window]
+                print(f"[小写金额] 密集区Y≈{best_y_center:.0f}，选中 {len(number_boxes)} 个数字框")
 
         if number_boxes:
-            all_digits = "".join([b['text'] for b in sorted(number_boxes, key=lambda x: x['x'])])
+            all_digits = "".join([b['normalized'] for b in sorted(number_boxes, key=lambda x: x['x'])])
             print(f"[小写金额合并] {all_digits}")
 
             if len(all_digits) >= 3:
                 amount_small = f"¥{all_digits[:-2]}.{all_digits[-2:]}"
                 print(f"[小写金额] {amount_small}")
+            else:
+                amount_small = f"¥{all_digits}"
+                print(f"[小写金额] {amount_small}")
         else:
-            print(f"[小写金额] 范围880-1000未找到数字，可能OCR识别失败")
+            print(f"[小写金额] Y>800范围内未找到数字框，可能OCR识别失败")
 
         data["本次偿还金额_小写"] = amount_small
         data["本次偿还金额_大写"] = _fix_amount_ocr_error(amount_upper) if amount_upper else None
