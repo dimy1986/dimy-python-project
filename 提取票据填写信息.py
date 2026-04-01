@@ -577,11 +577,13 @@ def _fix_amount_ocr_error(text: str):
         "人名币": "人民币",
         "常": "民",
         "参": "叁",
+        "琴": "叁",  # 🔥 新增
         "任": "仟",
         "伯": "佰",
         "圆": "元",
         "園": "元",
         "萬": "万",
+        "市": "币",  # 🔥 新增
     }
 
     for k, v in fix_map.items():
@@ -794,21 +796,32 @@ def _extract_customer_stamp_status(text: str):
 
 def extract_benpiao_fields(text: str, spec_fields, file_path=None):
     """
-    本票字段专用规则：
-    - 先按关键锚点提取（比通用“字段名+行尾”更稳）
-    - 抽不到再回退到通用规则
+    本票字段专用规则
     """
     data = {}
 
-    # 预提取
+    # ===== 调试：输出完整OCR结果 =====
+    if file_path:
+        print(f"\n[OCR调试] 文件: {file_path}")
+        print(f"[OCR调试] 文本长度: {len(text)}")
+        print(f"[OCR调试] 前500字符: {text[:500]}")
+        print(f"[OCR调试] 完整文本:\n{text}\n")
+
+    # ===== 预提取 =====
     accounts = _extract_account_candidates(text)
     date_match = re.search(r"\d{4}[年\-/\.]\d{1,2}(?:[月\-/\.]\d{1,2})?", text)
     amount_num = re.search(r"￥\s*([\d,]+\.\d{2})", text)
-    amount_cn = _extract_amount_upper(text,file_path)
-    print("原始大写金额识别结果：",amount_cn)
+    amount_cn = _extract_amount_upper(text, file_path)
+    print(f"[金额小写原始] {amount_num.group(1) if amount_num else None}")
+    print(f"[金额大写原始] {amount_cn}")
     amount_cn = _fix_amount_ocr_error(amount_cn)
+    print(f"[金额大写修正] {amount_cn}")
 
-    # 锚点提取（允许跨行少量噪声）
+    # ===== 初始化所有本票字段 =====
+    for field in BENPIAO_RULES.keys():
+        data[field] = None
+
+    # ===== 锚点提取（允许跨行少量噪声） =====
     anchor_rules = {
         "币别": r"币别[:：]?\s*(人民币|RMB|USD|CNY)",
         "日期": r"(\d{4}[年\-/\.]\d{1,2}(?:[月\-/\.]\d{1,2})?)",
@@ -821,81 +834,148 @@ def extract_benpiao_fields(text: str, spec_fields, file_path=None):
         "客户签章": r"客户签章[:：]?\s*([^\n\r]{2,60})",
     }
 
-    # 先填充通用回退值
-    for f in spec_fields:
-        field = f["field"]
+    # 先用通用回退规则填充
+    for field in anchor_rules.keys():
         data[field] = extract_field_value(text, field)
 
     # 再用本票锚点覆盖
     for field, rgx in anchor_rules.items():
-        if field not in data:
-            continue
         m = re.search(rgx, text)
         if m:
             data[field] = m.group(1).strip()
 
-    # 特殊字段处理
-    if "日期" in data:
-        data["日期"] = _clean_date(data.get("日期")) or _clean_date(date_match.group(0) if date_match else "")
+    # ===== 日期处理 =====
+    if data.get("日期"):
+        data["日期"] = _clean_date(data["日期"])
+    elif date_match:
+        data["日期"] = _clean_date(date_match.group(0))
 
-    if "金额" in data:
-        # 优先小写金额，保留更稳定格式；若无则回退大写
-        if amount_num:
-            data["金额"] = amount_num.group(1).replace(",", "")
-        elif amount_cn:
-            data["金额"] = amount_cn
-    # 新增金额大写字段（本票专用）：必须来自 OCR 文本，不做小写反推
+    # ===== 金额处理 =====
+    # 金额小写
+    if amount_num:
+        data["金额小写"] = "￥" + amount_num.group(1).replace(",", "")
+
+    # 金额大写
     data["金额大写"] = amount_cn
 
-    # 双账号：优先按锚点，否则按候选数字回填
-    if "申请人账号" in data:
-        m = _extract_account_by_explicit_label(text, ["申请人账号"])
-        block_acc = _extract_account_from_label_block(text, "申请人")
-        if block_acc:
-            data["申请人账号"] = fix_account(block_acc)
-        elif m:
-            data["申请人账号"] = fix_account(m)
-        elif accounts:
-            data["申请人账号"] = fix_account(accounts[-1])
+    # ===== 申请人账号 =====
+    m = _extract_account_by_explicit_label(text, ["申请人账号"])
+    block_acc = _extract_account_from_label_block(text, "申请人")
+    if block_acc:
+        data["申请人账号"] = fix_account(block_acc)
+    elif m:
+        data["申请人账号"] = fix_account(m)
+    elif accounts:
+        data["申请人账号"] = fix_account(accounts[-1])
 
-    if "收款人账号" in data:
-        # 按你的要求：收款人账号必须有明确“收款人账号”锚点才填值，否则置空
-        m = _extract_account_by_explicit_label(text, ["收款人账号", "收款账号"])
-        data["收款人账号"] = fix_account(m) if m else None
+    # ===== 收款人账号 =====
+    m = _extract_account_by_explicit_label(text, ["收款人账号", "收款账号"])
+    data["收款人账号"] = fix_account(m) if m else None
 
-    # 代理付款行：标签邻域优先，且过滤“用途/账号”等列名误识别
-    if "代理付款行" in data:
+    # ===== 代理付款行（过滤垃圾值） =====
+    if data.get("代理付款行"):
         v = _extract_near_label_text(text, ["代理付款行"], max_len=80)
         if v:
             data["代理付款行"] = v
-        else:
-            data["代理付款行"] = None
 
-        if data.get("代理付款行") in {"用途", "账号", "申请人", "收款人", "金额"}:
+        # 过滤垃圾值
+        if data.get("代理付款行") in {"用���", "账号", "申请人", "收款人", "金额"}:
             data["代理付款行"] = None
-        # 若提取到的是账号形态，强制清空
         if data.get("代理付款行") and re.fullmatch(r"\d{8,30}", str(data["代理付款行"]).strip()):
             data["代理付款行"] = None
-        # 仅接受明确行名（银行/支行/分行），否则置空
         if data.get("代理付款行"):
             v2 = str(data["代理付款行"]).strip()
             if not any(k in v2 for k in ["银行", "支行", "分行"]):
                 data["代理付款行"] = None
 
-    # 人名字段：用标签邻域提取，避免把“申请人/收款人”标签本身识别为值
-    if "申请人" in data:
+    # ===== 申请人、收款人（用标签邻域提取） =====
+    if data.get("申请人"):
         v = _extract_near_label_name(text, ["申请人"])
         if v:
             data["申请人"] = v
-    if "收款人" in data:
+
+    if data.get("收款人"):
         v = _extract_near_label_name(text, ["收款人"])
         if v:
             data["收款人"] = v
 
-    # 客户签章：如果仅识别到银行“业务专用章”等文本，则视为空（不应当算客户签章）
-    if "客户签章" in data:
+    # ===== 客户签章 =====
+    if data.get("客户签章"):
         data["客户签章"] = _extract_customer_stamp_status(text)
 
+    # ===== 签字字段（录入、复核、授权、会计主管） =====
+    if file_path:
+        try:
+            # 转换为图片
+            img = None
+            if file_path.lower().endswith('.pdf'):
+                images = convert_from_path(file_path, dpi=200)
+                if images:
+                    img = images[0]
+            else:
+                img = Image.open(file_path)
+
+            if img:
+                w, h = img.size
+                img_np = np.array(img)
+                res = ocr.ocr(img_np)
+
+                # 收集所有OCR框
+                all_boxes = []
+                for line in res:
+                    for box in line:
+                        text = box[1][0]
+                        coords = box[0]
+                        x_avg = sum([pt[0] for pt in coords]) / len(coords)
+                        y_avg = sum([pt[1] for pt in coords]) / len(coords)
+                        all_boxes.append({'text': text, 'x': x_avg, 'y': y_avg})
+
+                # 🔥 定义签字位置ROI
+                # 从图片看，签字区域在下方，Y坐标应该更靠后
+                # 下移到 0.88 以上，避免和费用项重叠
+                signature_regions = {
+                    "录入": (int(w * 0.0), int(h * 0.88), int(w * 0.3), h),
+                    "复核": (int(w * 0.3), int(h * 0.88), int(w * 0.6), h),
+                    "授权": (int(w * 0.6), int(h * 0.88), int(w * 0.8), h),
+                    "会计主管": (int(w * 0.8), int(h * 0.88), int(w * 1.0), h),
+                }
+
+                # 🔥 垃圾文本过滤词表
+                garbage_words = [
+                    "工本费", "手续费", "对私", "业务", "专用", "常", "00",
+                    "业务专用", "本票工本费", "本票手续费", "客户签章"
+                ]
+
+                # 从各个签字区域提取文本
+                for sig_name, (x1, y1, x2, y2) in signature_regions.items():
+                    region_boxes = [b for b in all_boxes if x1 < b['x'] < x2 and y1 < b['y'] < y2]
+
+                    if region_boxes:
+                        # 提取该区域的文本，按X坐标排序
+                        region_text = "".join([b['text'] for b in sorted(region_boxes, key=lambda x: x['x'])])
+
+                        # 🔥 过滤垃圾文本
+                        original_text = region_text
+                        for garbage in garbage_words:
+                            region_text = region_text.replace(garbage, "")
+
+                        # 过滤掉标签词
+                        region_text = re.sub(r"[录复授会计主管核权人入]", "", region_text).strip()
+
+                        if region_text and len(region_text) > 0:
+                            data[sig_name] = region_text
+                            print(f"[签字提取] {sig_name}: 原始='{original_text}' -> 清理后='{region_text}'")
+                        else:
+                            print(f"[签字提取] {sig_name}: 原始='{original_text}' -> 无签字")
+                    else:
+                        print(f"[签字提取] {sig_name}: 该区域无文本框")
+
+        except Exception as e:
+            print(f"[签字提取] 提取失败: {e}")
+            import traceback
+            traceback.print_exc()
+
+    print(f"[本票提取] 提取完毕，共{len([v for v in data.values() if v is not None])}个字段有值\n")
     return data
 
 
@@ -979,8 +1059,12 @@ def extract_daikuan_fields_v6(file_path):
 
         # ===== 第三步：字段提取 =====
 
-        # 1. 币种
-        data["币种"] = "人民币"
+        # 1. 币种（从文本提取）
+        # 🔥 改：从OCR文本提取币种，而不是写死
+        ocr_text = "\n".join([b['text'] for b in all_boxes])
+        currency_match = re.search(r"(人民币|USD|EUR|GBP|JPY|CNY)", ocr_text)
+        data["币种"] = currency_match.group(1) if currency_match else "人民币"
+        print(f"[币种] {data['币种']}")
 
         # 2. 日期（Y<600）
         date_found = False
@@ -1268,7 +1352,8 @@ def extract_daikuan_fields_v6(file_path):
                 if m:
                     val = m.group(1).strip()
                     val = re.sub(r"[）)】\s，]", "", val)
-                    if val and val not in ["经办"]:
+                    # 🔥 检测：空白、/、-、标签词
+                    if val and not _is_empty_signature(val):
                         data["经办"] = val
                         print(f"[经办] {val}")
 
@@ -1278,7 +1363,8 @@ def extract_daikuan_fields_v6(file_path):
                 if m:
                     val = m.group(1).strip()
                     val = re.sub(r"[）)】\s]", "", val)
-                    if val and val not in ["复核", ""]:
+                    # 🔥 检测：空白、/、-、标签词
+                    if val and not _is_empty_signature(val):
                         data["复核"] = val
                         print(f"[复核] {val}")
 
@@ -1288,17 +1374,19 @@ def extract_daikuan_fields_v6(file_path):
                 if m:
                     val = m.group(1).strip()
                     val = re.sub(r"[）)】\s]", "", val)
-                    if val and val not in ["授权", ""]:
+                    # 🔥 检测：空白、/、-、标签词
+                    if val and not _is_empty_signature(val):
                         data["授权"] = val
                         print(f"[授权] {val}")
 
-            # 主管（🔥修复：不要贪心匹配授权）
+            # 主管（不要贪心匹配授权）
             if "主管" in row_text:
                 m = re.search(r"主管[:：]?\s*([^授]*?)(?:授权|$)", row_text)
                 if m:
                     val = m.group(1).strip()
                     val = re.sub(r"[）)】\s，]", "", val)
-                    if val and val not in ["主管", ""]:
+                    # 🔥 检测：空白、/、-、标签词
+                    if val and not _is_empty_signature(val):
                         data["主管"] = val
                         print(f"[主管] {val}")
 
@@ -1310,6 +1398,32 @@ def extract_daikuan_fields_v6(file_path):
         import traceback
         traceback.print_exc()
         return {}
+
+# ===== 工具函数 =====
+def _is_empty_signature(val: str) -> bool:
+    """
+    判断签字字段是否为空
+    - 纯空白
+    - 全是 / 或 -
+    - 标签词（经办、复核、授权、主管等）
+    """
+    if not val:
+        return True
+
+    # 纯空白
+    if not val.strip():
+        return True
+
+    # 全是 / 或 -
+    if re.match(r"^[/\-\s]+$", val):
+        return True
+
+    # 标签词
+    label_words = {"经办", "复核", "授权", "主管", ""}
+    if val in label_words:
+        return True
+
+    return False
 
 
 def _detect_stamp_in_image(file_path: str, stamp_type: str):
@@ -1569,153 +1683,149 @@ def detect_doc_type(text: str) -> str:
     return "unknown"
 
 # ================== 提取 + 校验 ==================
+# ================== 凭证规则定义 ==================
+BENPIAO_RULES = {
+    "币别": {"required": True},
+    "日期": {"required": True},
+    "业务类型": {"required": True},
+    "付款方式": {"required": True},
+    "申请人": {"required": True},
+    "申请人账号": {"required": True},
+    "用途": {"required": True},
+    "收款人": {"required": True},
+    "收款人账号": {"required": True},
+    "代理付款行": {"required": True},
+    "金额大写": {"required": True},
+    "金额小写": {"required": True},
+    "客户签章": {"required": True},
+    "录入": {"required": False},
+    "复核": {"required": False},
+    "授权": {"required": False},
+    "会计主管": {"required": False},
+}
+
+DAIKUAN_RULES = {
+    "日期": {"required": True},
+    "币种": {"required": True},
+    "产品名称": {"required": False},
+    "名称": {"required": True},
+    "付款账号": {"required": True},
+    "付款开户银行": {"required": True},
+    "贷款账号": {"required": True},
+    "贷款开户银行": {"required": True},
+    "本次偿还金额_小写": {"required": True},
+    "本次偿还金额_大写": {"required": True},
+    "摘要": {"required": True},
+    "累计还款": {"required": False},
+    "还款单位签章": {"required": False},  # 条件必填，暂按非必填处理
+    "银行签章": {"required": False},
+    "经办": {"required": True},
+    "复核": {"required": False},
+    "授权": {"required": False},
+    "主管": {"required": False},
+}
+
+
 def extract_and_validate(text, spec_fields, file_path=None, sheet_name: str = "", doc_type: str = "unknown"):
     check = {}
     is_benpiao = (doc_type == "benpiao")
     is_daikuan = (doc_type == "daikuan")
 
+    # ===== 第一步：提取数据 =====
     if is_benpiao:
         data = extract_benpiao_fields(text, spec_fields, file_path)
+        # 🔥 补全缺失的本票字段
+        for field in BENPIAO_RULES.keys():
+            if field not in data:
+                data[field] = None
     elif is_daikuan:
-        # 🔥 改为调用v5版本，直接传file_path而不是text
         data = extract_daikuan_fields_v6(file_path)
+        # 🔥 补全缺失的贷款字段
+        for field in DAIKUAN_RULES.keys():
+            if field not in data:
+                data[field] = None
     else:
         data = {}
 
-    for f in spec_fields:
-        field = f["field"]
-        required = bool(f.get("required"))
-        requirement = f.get("requirement", "")
+    # ===== 第二步：选择规则 =====
+    if is_benpiao:
+        rules = BENPIAO_RULES
+    elif is_daikuan:
+        rules = DAIKUAN_RULES
+    else:
+        rules = {}
 
-        value = data.get(field)
+    # ===== 第三步：根据规则检查每个字段 =====
+    for field_name, rule in rules.items():
+        value = data.get(field_name)
+        required = rule.get("required", False)
 
         # 账号纠错
-        if field in ["账号", "收款账号", "申请人账号", "收款人账号", "付款账号", "贷款账号"]:
+        if field_name in ["账号", "收款账号", "申请人账号", "收款人账号", "付款账号", "贷款账号"]:
             value = fix_account(value) if value else None
+            data[field_name] = value
 
-        data[field] = value
-
-        # ===== 检查规则 =====
-        if field == "还款单位签章":
-            check[field] = "PASS" if value == "有章" else ("FAIL-无章" if required else "PASS")
-
-        elif field == "银行签章":
-            check[field] = "PASS"  # 银行签章非必填
-
-        elif field in ["经办", "复核", "授权", "主管"]:
-            if value:
-                check[field] = "PASS"
-            elif required:
-                check[field] = "FAIL-缺失"
+        # 检查逻辑
+        if not value:
+            if required:
+                check[field_name] = "FAIL-缺失"
             else:
-                check[field] = "PASS"
-
-        elif field in ["本次偿还金额_小写", "本次偿还金额_大写"]:
-            if not value:
-                check[field] = "FAIL-缺失" if required else "PASS"
-            else:
-                check[field] = "PASS"
-
-        elif required and not value:
-            check[field] = "FAIL-缺失"
+                check[field_name] = "PASS"
         else:
-            check[field] = "PASS"
+            check[field_name] = "PASS"
 
-        if requirement:
-            check[f"{field}_规范"] = requirement
+    # ===== 第四步：特殊检查 =====
+    # 本票：金额大小写一致性
+    if is_benpiao:
+        amount_small = data.get("金额小写")
+        amount_large = data.get("金额大写")
 
-    # ===== 金额一致性检查 =====
-    if is_daikuan:
-        amount_small = data.get("本次偿还金额_小写")
-        amount_upper_ocr = data.get("本次偿还金额_大写")
-
-        if amount_small and amount_upper_ocr:
-            num_match = re.search(r"(\d+\.\d{2})", str(amount_small))
-            if num_match:
-                num = num_match.group(1)
-                expected_upper = _money_to_upper(num)
-                if expected_upper:
-                    a = _normalize_upper_amount_text(amount_upper_ocr)
-                    b = _normalize_upper_amount_text(expected_upper)
-                    check["金额大小写一致性"] = "一致" if a == b else "不一致"
+        if amount_small and amount_large:
+            try:
+                num_match = re.search(r"(\d+\.\d{2})", str(amount_small))
+                if num_match:
+                    num = num_match.group(1)
+                    expected_upper = _money_to_upper(num)
+                    if expected_upper:
+                        a = _normalize_upper_amount_text(amount_large)
+                        b = _normalize_upper_amount_text(expected_upper)
+                        check["金额大小写一致性"] = "一致" if a == b else "不一致"
+                    else:
+                        check["金额大小写一致性"] = "无法校验"
                 else:
-                    check["金额大小写一致性"] = "无法校验"
-            else:
-                check["金额大小写一致性"] = "无法提取数值"
+                    check["金额大小写一致性"] = "无法提取数值"
+            except Exception as e:
+                check["金额大小写一致性"] = f"校验失败: {e}"
         else:
             check["金额大小写一致性"] = "FAIL-缺失金额"
 
+    # 贷款凭证：金额大小写一致性
+    if is_daikuan:
+        amount_small = data.get("本次偿还金额_小写")
+        amount_large = data.get("本次偿还金额_大写")
+
+        if amount_small and amount_large:
+            try:
+                num_match = re.search(r"(\d+\.\d{2})", str(amount_small))
+                if num_match:
+                    num = num_match.group(1)
+                    expected_upper = _money_to_upper(num)
+                    if expected_upper:
+                        a = _normalize_upper_amount_text(amount_large)
+                        b = _normalize_upper_amount_text(expected_upper)
+                        check["金额一致性"] = "一致" if a == b else "不一致"
+                    else:
+                        check["金额一致性"] = "无法校验"
+                else:
+                    check["金额一致性"] = "无法提取数值"
+            except Exception as e:
+                check["金额一致性"] = f"校验失败: {e}"
+        else:
+            check["金额一致性"] = "FAIL-缺失金额"
+
     return data, check
 
-def extract_other_fields(file_path):
-    """提取其他类型凭证的字段（暂未实现）"""
-    return {}
 
-
-def extract_and_validate_from_file(file_path, is_daikuan=True):
-    """新函数 - 直接从文件提取并显示结果（用于贷款凭证）"""
-
-    if is_daikuan:
-        data = extract_daikuan_fields_v6(file_path)
-    else:
-        data = extract_other_fields(file_path)
-
-    # ===== 检查结果格式化 =====
-    print("\n" + "=" * 80)
-    print("【检查结果】")
-    print("=" * 80)
-
-    if is_daikuan:
-        result_fields = [
-            ("日期", data.get("日期")),
-            ("币种", data.get("币种")),
-            ("产品名称", data.get("产品名称")),
-            ("名称", data.get("名称")),
-            ("付款账号", data.get("付款账号")),
-            ("付款开户银行", data.get("付款开户银行")),
-            ("贷款账号", data.get("贷款账号")),
-            ("贷款开户银行", data.get("贷款开户银行")),
-            ("本次偿还金额_小写", data.get("本次偿还金额_小写")),
-            ("本次偿还金额_大写", data.get("本次偿还金额_大写")),
-            ("摘要", data.get("摘要")),
-            ("累计还款", data.get("累计还款")),
-            ("还款单位签章", data.get("还款单位签章")),
-            ("银行签章", data.get("银行签章")),
-            ("经办", data.get("经办")),
-            ("复核", data.get("复核")),
-            ("授权", data.get("授权")),
-            ("主管", data.get("主管")),
-        ]
-    else:
-        result_fields = [
-            ("日期", data.get("日期")),
-            ("币种", data.get("币种")),
-        ]
-
-    for field_name, field_value in result_fields:
-        print(f"{field_name}\t{field_value}")
-
-    # ===== 金额大小写一致性检查 =====
-    small = data.get("本次偿还金额_小写")
-    large = data.get("本次偿还金额_大写")
-
-    print("\n" + "=" * 80)
-    print("【金额大小写一致性】")
-    print("=" * 80)
-    print(f"小写={small}, 大写={large}")
-
-    if small and large:
-        print("✅ 两个金额都有")
-    elif small and not large:
-        print("⚠️ 缺少大写金额")
-    elif large and not small:
-        print("⚠️ 缺少小写金额")
-    else:
-        print("❌ 大小写金额都缺少")
-
-    print("=" * 80 + "\n")
-
-    return data
 
 # ================== 主程序 ==================
 def save_excel_with_fallback(df: pd.DataFrame, output_path: str):
@@ -1734,12 +1844,6 @@ def save_excel_with_fallback(df: pd.DataFrame, output_path: str):
 def process_one_folder(folder: str):
     print(f"\n========== 开始处理目录: {folder} ==========")
 
-    spec_path = os.path.join(folder, "凭证填写规范.xlsx")
-    if not os.path.exists(spec_path):
-        print(f"跳过目录（未找到凭证填写规范.xlsx）: {folder}")
-        return
-
-    spec_by_sheet = load_spec_fields(spec_path)
     files = get_files(folder)
     if not files:
         print(f"目录下未找到待识别 pdf/图片: {folder}")
@@ -1756,45 +1860,50 @@ def process_one_folder(folder: str):
         doc_type = detect_doc_type(text)
         print(f"识别类型: {doc_type}")
 
-        sheet = choose_sheet_for_subfolder(spec_by_sheet, os.path.basename(folder))
-        spec_fields = spec_by_sheet.get(sheet, [])
-
-        # 在 process_one_folder 中
-        if doc_type == "daikuan" :
-            data = extract_daikuan_fields_v6(f)  # 直接从文件提取
-            check = {}  # 暂时空着
-        else:
-            data, check = extract_and_validate(text, spec_fields, f, sheet_name=sheet, doc_type=doc_type)
+        # 🔥 直接调用，不需要spec_fields
+        data, check = extract_and_validate(text, [], f, sheet_name="", doc_type=doc_type)
 
         data["文件名"] = os.path.basename(f)
         check["文件名"] = os.path.basename(f)
-        if sheet:
-            data["规范sheet"] = sheet
-            check["规范sheet"] = sheet
 
         all_data.append(data)
         all_check.append(check)
-        for sf in spec_fields:
-            field = sf["field"]
+
+        # 🔥 根据doc_type生成检查长表
+        if doc_type == "benpiao":
+            fields = list(BENPIAO_RULES.keys())
+            amount_field = "金额大小写一致性"
+        elif doc_type == "daikuan":
+            fields = list(DAIKUAN_RULES.keys())
+            amount_field = "金额一致性"
+        else:
+            fields = []
+            amount_field = None
+
+        # 普通字段检查
+        for field in fields:
             all_check_long.append(
                 {
                     "文件名": os.path.basename(f),
-                    "规范sheet": sheet,
                     "字段名": field,
                     "提取值": data.get(field),
                     "检查结果": check.get(field),
-                    "填写要求": sf.get("requirement", ""),
                 }
             )
-        if "金额大小写一致性" in check:
+
+        # 金额一致性检查
+        if amount_field and amount_field in check:
+            if doc_type == "benpiao":
+                amount_value = f"小写={data.get('金额小写')}, 大写={data.get('金额大写')}"
+            else:  # daikuan
+                amount_value = f"小写={data.get('本次偿还金额_小写')}, 大写={data.get('本次偿还金额_大写')}"
+
             all_check_long.append(
                 {
                     "文件名": os.path.basename(f),
-                    "规范sheet": sheet,
-                    "字段名": "金额大小写一致性",
-                    "提取值": f"小写={data.get('本次偿还金额_小写')}, 大写={data.get('本次偿还金额_大写')}",
-                    "检查结果": check.get("金额大小写一致性"),
-                    "填写要求": "金额栏大小写应一致",
+                    "字段名": amount_field,
+                    "提取值": amount_value,
+                    "检查结果": check.get(amount_field),
                 }
             )
 
@@ -1802,12 +1911,6 @@ def process_one_folder(folder: str):
     df_data = pd.DataFrame(all_data)
     df_check = pd.DataFrame(all_check)
     df_check_long = pd.DataFrame(all_check_long)
-
-    # 🔥 删除不需要的列
-    cols_to_drop = ["开户银行", "本次偿还金额"]  # 这两列应该不在规范里，或者已被拆分
-    for col in cols_to_drop:
-        if col in df_data.columns:
-            df_data = df_data.drop(columns=[col])
 
     output_data = os.path.join(folder, "提取结果.xlsx")
     output_check = os.path.join(folder, "检查结果.xlsx")
