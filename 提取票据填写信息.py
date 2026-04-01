@@ -22,47 +22,6 @@ from PIL import Image
 import numpy as np
 import cv2
 
-def preprocess_for_amount(img):
-    """金额专用增强（提高清晰度）"""
-    img = np.array(img)
-
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-
-    # 放大（非常关键）
-    gray = cv2.resize(gray, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
-
-    # 二值化
-    _, binary = cv2.threshold(gray, 150, 255, cv2.THRESH_BINARY)
-
-    return binary
-
-
-def ocr_amount_region(image_path):
-    """只识别金额区域"""
-    img = Image.open(image_path)
-
-    w, h = img.size
-
-    # ⚠️ 这个区域你可以后面微调（关键）
-    crop = img.crop((
-        int(w * 0.4),
-        int(h * 0.3),
-        int(w * 1.0),
-        int(h * 0.7)
-    ))
-
-    crop = preprocess_for_amount(crop)
-
-    res = ocr.ocr(crop)
-
-    text = ""
-    for line in res:
-        for box in line:
-            text += box[1][0]
-
-    return text
-
-
 def load_pdf2image_convert():
     """
     延迟导入 pdf2image，避免 IDE 在未安装依赖时提示 unresolved reference。
@@ -129,7 +88,6 @@ if OCR_MODE in ("auto", "paddleocr") and PaddleOCR is not None:
             "使用外部OCR模型: det=%s rec=%s cls=%s",
             det_model_dir, rec_model_dir, cls_model_dir
         )
-        # 按你提供的外部模型初始化方式
         ocr = PaddleOCR(
             det_model_dir=det_model_dir,
             rec_model_dir=rec_model_dir,
@@ -154,6 +112,13 @@ if _resolved_mode is None:
         "- 建议：在当前项目环境安装 Python 版 PaddleOCR：pip install paddleocr\n"
         "- 或：配置 PADDLEOCR_JSON_EXE 使用 PaddleOCR-json。"
     )
+
+# ================== 注入OCR实例到提取模块 ==================
+import voucher_extractor
+voucher_extractor.set_ocr(ocr)
+
+from voucher_extractor import BENPIAO_RULES, DAIKUAN_RULES, fix_account
+from voucher_validator import extract_and_validate
 
 # ================== 工具函数 ==================
 def get_files(folder):
@@ -204,7 +169,6 @@ def process_file(file_path):
 
                 img = img.convert("L")
 
-                # 🔥 转 numpy（关键）
                 img = np.array(img)
 
                 print("图像shape:", img.shape)
@@ -235,16 +199,13 @@ def process_file(file_path):
                     if x.get("text")
                 ])
 
-        # ===== 新增：空文本检测 =====
         if not all_text.strip():
             print(f"⚠️ OCR未识别到任何文本: {file_path}")
 
-        # 去空格干扰
         all_text = all_text.replace(" ", "")
 
         final_text = clean_text(all_text)
 
-        # ===== 新增：输出部分内容用于调试 =====
         print(f"[OCR] 总长度: {len(final_text)}")
         print(f"[OCR] 前100字符: {final_text[:100]}")
 
@@ -255,11 +216,6 @@ def process_file(file_path):
         print(f"❌ OCR异常: {e}")
         return ""
 
-def fix_account(text):
-    if not text:
-        return text
-    return text.replace("O", "0").replace("I", "1")
-
 
 def extract_bank_by_context(lines):
     pay_bank = None
@@ -268,7 +224,6 @@ def extract_bank_by_context(lines):
     for i, line in enumerate(lines):
         if "开户银行" in line:
 
-            # 当前行提取
             banks = re.findall(r"开户银行\s*([\u4e00-\u9fa5A-Za-z0-9]+)", line)
 
             if len(banks) >= 1:
@@ -276,7 +231,6 @@ def extract_bank_by_context(lines):
             if len(banks) >= 2:
                 loan_bank = banks[1]
 
-            # 👇 如果没提到，往下一行找（关键）
             if not pay_bank and i + 1 < len(lines):
                 if "银行" in lines[i + 1]:
                     pay_bank = lines[i + 1]
@@ -290,7 +244,7 @@ def extract_bank_by_context(lines):
 # ================== 规范读取（凭证填写规范.xlsx 驱动） ==================
 def load_spec_fields(spec_path: str):
     """
-    从“凭证填写规范.xlsx”读取字段清单与是否必填。
+    从"凭证填写规范.xlsx"读取字段清单与是否必填。
     规范表结构目前是：两列（要素名称、填写要求），且每个 sheet 都是同样结构。
     """
     if not os.path.exists(spec_path):
@@ -314,13 +268,11 @@ def load_spec_fields(spec_path: str):
 
             if not field or field == "nan":
                 continue
-            # 跳过表头/标题行
             if any(k in field for k in ["要素", "填写要求", "规范"]):
                 continue
 
             required = False
             if req and req != "nan":
-                # 简单规则：出现“必填/不得为空/不能为空/必须填写”视为必填；出现“非必填/可不填”则视为非必填
                 req_lower = req.lower()
                 if any(k in req for k in ["必填", "不得为空", "不能为空", "必须填写", "必须填"]):
                     required = True
@@ -329,7 +281,6 @@ def load_spec_fields(spec_path: str):
                 if "not required" in req_lower:
                     required = False
 
-            # 规范里“账号”可能出现两次（申请人账号、收款人账号），这里先做去重计数
             duplicate_counter[field] = duplicate_counter.get(field, 0) + 1
             norm_field = field
             if field == "账号" and duplicate_counter[field] == 1:
@@ -345,22 +296,12 @@ def load_spec_fields(spec_path: str):
 
 
 def choose_sheet(spec_by_sheet, text: str):
-    """
-    当前目录下的规范文件含多个sheet（如：银行汇票/借款还款凭证）。
-    这里先用“尽量不打扰”的策略：优先选择字段数最多的那个sheet；
-    后续若你提供明确的票据类型识别关键词，可再加规则分流。
-    """
     if not spec_by_sheet:
         return None
     return max(spec_by_sheet.keys(), key=lambda s: len(spec_by_sheet.get(s, [])))
 
 
 def choose_sheet_for_subfolder(spec_by_sheet, subfolder_name: str):
-    """
-    按子目录名称优先选规范sheet，避免“总是命中同一个sheet”的问题。
-    - 子目录名包含“本票/汇票” -> 优先匹配“银行汇（本）票申请书填写规范”
-    - 子目录名包含“贷款/还款” -> 优先匹配“贷款还款凭证填写规范”
-    """
     if not spec_by_sheet:
         return None
 
@@ -376,1297 +317,7 @@ def choose_sheet_for_subfolder(spec_by_sheet, subfolder_name: str):
             if any(w in s for w in ["贷款", "还款"]):
                 return s
 
-    # 若目录名不含特征词，回退到原逻辑
     return choose_sheet(spec_by_sheet, "")
-
-
-# ================== 字段抽取规则（可逐步补全） ==================
-# 先提供一组常见字段的“强规则”，其余字段走“弱规则”兜底（按字段名定位）
-FIELD_REGEX = {
-    "币别": r"(人民币|RMB|USD|CNY)",
-    "日期": r"(\d{4}[年\-\.]\d{1,2}[月\-\.]\d{1,2}日?)",
-    "申请人": r"申请人[:：]?\s*([\u4e00-\u9fa5A-Za-z0-9（）()·.\-]+)",
-    "账号": r"账号[:：]?\s*(\d{10,30})",
-    "用途": r"用途[:：]?\s*(.+)",
-    "收款人": r"收款人[:：]?\s*([\u4e00-\u9fa5A-Za-z0-9（）()·.\-]+)",
-    "收款账号": r"收款人账号[:：]?\s*(\d{10,30})",
-    "代理付款行": r"代理付款行[:：]?\s*(.+)",
-    "金额小写": r"￥?\s*([\d,]+\.\d{2})",
-    "金额大写": r"(人民币[壹贰叁肆伍陆柒捌玖拾佰仟万亿元角分整]+)",
-}
-
-
-
-
-def extract_field_value(text, field):
-    pattern = rf"{field}[:：]?\s*(.*)"
-    match = re.search(pattern, text)
-
-    if match:
-        value = match.group(1).strip()
-
-        # ❗关键：截断到下一个字段
-        value = re.split(r"(日期|币种|产品名称|名称|付款账号|开户银行|贷款账号|本次偿还金额|摘要)", value)[0]
-
-        return value.strip()
-
-    return None
-
-
-def _clean_date(value: str):
-    if not value:
-        return value
-    m = re.search(r"(\d{4})[年\-/\.](\d{1,2})[月\-/\.]?(\d{1,2})?", value)
-    if not m:
-        return value
-    y, mo, d = m.group(1), m.group(2), m.group(3) or ""
-    if d:
-        return f"{y}年{int(mo)}月{int(d)}日"
-    return f"{y}年{int(mo)}月"
-
-
-def _extract_account_candidates(text: str):
-    nums = re.findall(r"\d{10,30}", text)
-    # 去重并按长度降序，尽量保留更完整账号
-    seen = set()
-    result = []
-    for n in sorted(nums, key=lambda x: len(x), reverse=True):
-        if n not in seen:
-            seen.add(n)
-            result.append(n)
-    return result
-#贷款还款凭证使用的函数
-def normalize_number(text: str):
-    """OCR数字纠错"""
-    return text.replace("O", "0").replace("o", "0").replace("l", "1")
-
-
-
-def parse_line_fields(line):
-    result = {}
-
-    # 名称
-    if "名称" in line:
-        value = line.replace("名称", "").strip()
-        if len(value) > 1:
-            result["名称"] = value
-
-    # 付款账号 + 贷款账号（同一行）
-    if "付款账号" in line:
-        m = re.search(r"付款账号\s*([0-9]{10,})", line)
-        if m:
-            result["付款账号"] = m.group(1)
-
-    if "贷款账号" in line:
-        m = re.search(r"贷款账号\s*([0-9]{10,})", line)
-        if m:
-            result["贷款账号"] = m.group(1)
-
-    # 开户银行（可能两个）
-    if "开户银行" in line:
-        banks = re.findall(r"开户银行\s*([\u4e00-\u9fa5A-Za-z0-9]+)", line)
-        if len(banks) >= 1:
-            result["付款开户银行"] = banks[0]
-        if len(banks) >= 2:
-            result["贷款开户银行"] = banks[1]
-
-    return result
-
-def extract_amount(text: str):
-    """提取小写金额（优先从'本次偿还金额'附近找）"""
-    text = normalize_number(text)
-    lines = text.split("\n")
-
-    # 1️⃣ 优先：字段邻域查找（最稳）
-    for i, line in enumerate(lines):
-        if "本次偿还金额" in line:
-            for j in range(i, min(i + 5, len(lines))):
-                m = re.search(r"\d+\.\d{2}", lines[j])
-                if m:
-                    return m.group(0)
-
-    # 2️⃣ fallback：全局查找
-    matches = re.findall(r"\d+\.\d{2}", text)
-    if matches:
-        return matches[0]
-
-    return None
-
-
-def extract_big_amount(text: str):
-    """提取大写金额"""
-    m = re.search(r"人民币[\u4e00-\u9fa5]+元", text)
-    return m.group(0) if m else None
-
-def _split_lines(text: str):
-    return [ln.strip() for ln in text.splitlines() if ln.strip()]
-
-
-def _extract_account_from_label_block(text: str, label: str):
-    """
-    从“标签块”中提取账号：
-    - 从 label 行开始向下找，优先取该块内第一条 10-30 位数字
-    - 遇到下一个同级字段标签则停止，避免串到别的块
-    """
-    lines = _split_lines(text)
-    if not lines:
-        return None
-
-    stop_words = {
-        "申请人", "收款人", "代理付款行", "用途", "金额", "客户签章",
-        "业务类型", "付款方式", "申请机构", "签发机构", "票据种类", "流水号", "币别",
-    }
-    start_indices = [i for i, ln in enumerate(lines) if label in ln]
-    for i in start_indices:
-        for j in range(i + 1, min(i + 10, len(lines))):
-            ln = lines[j]
-            if j > i + 1 and any(w in ln for w in stop_words):
-                break
-            m = re.search(r"(\d{10,30})", ln)
-            if m:
-                return m.group(1)
-    return None
-
-
-def _extract_account_by_explicit_label(text: str, labels):
-    """
-    仅通过显式标签提取账号（更严格）：
-    例如：申请人账号: 123... / 收款人账号: 123...
-    """
-    lines = _split_lines(text)
-    for ln in lines:
-        for lb in labels:
-            m = re.search(rf"{re.escape(lb)}[:：]?\s*(\d{{10,30}})", ln)
-            if m:
-                return m.group(1)
-    return None
-
-
-def _extract_amount_upper(text: str, file_path=None):
-    # ===== 优先用ROI识别 =====
-    if file_path:
-        try:
-            roi_text = ocr_amount_region(file_path)
-            if roi_text:
-                m = re.search(r"(人民币[^\n\r]{1,30}?元整)", roi_text)
-                if m:
-                    return m.group(1).strip()
-        except Exception as e:
-            print("ROI金额识别失败:", e)
-
-    # ===== fallback 全图 =====
-    m = re.search(r"(人民币[^\n\r]{1,30}?元整)", text)
-    if m:
-        return m.group(1).strip()
-
-    m = re.search(r"([^\n\r]{2,40}?元整)", text)
-    if m:
-        return m.group(1).strip()
-
-    return None
-
-def _fix_amount_ocr_error(text: str):
-    """
-    OCR金额大写纠错（只做轻量修复，不影响原结构）
-    """
-    if not text:
-        return text
-
-    fix_map = {
-        "人常": "人民币",
-        "人名币": "人民币",
-        "常": "民",
-        "参": "叁",
-        "琴": "叁",  # 🔥 新增
-        "任": "仟",
-        "伯": "佰",
-        "圆": "元",
-        "園": "元",
-        "萬": "万",
-        "市": "币",  # 🔥 新增
-    }
-
-    for k, v in fix_map.items():
-        text = text.replace(k, v)
-
-    return text
-
-def _money_to_upper(num_str: str):
-    """
-    将小写金额字符串（如 336400.00）转换为标准大写金额（人民币叁拾叁万陆仟肆佰元整）。
-    """
-    if not num_str:
-        return None
-    try:
-        n = float(str(num_str).replace(",", ""))
-    except Exception:
-        return None
-
-    digits = "零壹贰叁肆伍陆柒捌玖"
-    units = ["", "拾", "佰", "仟"]
-    big_units = ["", "万", "亿", "兆"]
-
-    integer = int(n)
-    fraction = round((n - integer) * 100)
-    jiao = fraction // 10
-    fen = fraction % 10
-
-    if integer == 0:
-        int_part = "零"
-    else:
-        parts = []
-        group_idx = 0
-        need_zero = False
-        while integer > 0:
-            group = integer % 10000
-            integer //= 10000
-
-            if group == 0:
-                need_zero = True
-                group_idx += 1
-                continue
-
-            group_str = ""
-            zero_in_group = False
-            for i in range(4):
-                d = group % 10
-                group //= 10
-                if d == 0:
-                    if group_str:
-                        zero_in_group = True
-                else:
-                    if zero_in_group:
-                        group_str = "零" + group_str
-                        zero_in_group = False
-                    group_str = digits[d] + units[i] + group_str
-
-            if need_zero and parts and not group_str.endswith("零"):
-                group_str += "零"
-            group_str += big_units[group_idx]
-            parts.append(group_str)
-            need_zero = False
-            group_idx += 1
-
-        int_part = "".join(reversed(parts)).rstrip("零")
-
-    if jiao == 0 and fen == 0:
-        frac_part = "整"
-    else:
-        frac_part = ""
-        if jiao > 0:
-            frac_part += digits[jiao] + "角"
-        if fen > 0:
-            frac_part += digits[fen] + "分"
-
-    return f"人民币{int_part}元{frac_part}"
-
-
-def _normalize_upper_amount_text(v: str):
-    """
-    归一化大写金额文本，便于做一致性比较（仅用于校验）。
-    """
-    if not v:
-        return ""
-    s = str(v)
-    # 常见OCR混淆字修正（仅用于比较，不回写提取值）
-    fix_map = {
-        "参": "叁",
-        "伯": "佰",
-        "任": "仟",
-        "圆": "元",
-        "園": "元",
-        "圓": "元",
-        "常": "民",
-        "市": "币",
-        "陆": "陆",
-    }
-    for k, vv in fix_map.items():
-        s = s.replace(k, vv)
-
-    # 只保留金额相关字符
-    s = re.sub(r"[^人民币零壹贰叁肆伍陆柒捌玖拾佰仟万亿兆元角分整]", "", s)
-    return s
-
-
-def _is_name_candidate(s: str):
-    if not s:
-        return False
-    if len(s) > 24:
-        return False
-    bad_words = [
-        "申请人", "收款人", "账号", "用途", "代理付款行", "金额", "客户签章",
-        "业务类型", "付款方式", "银行", "本票", "汇票", "流水号", "票据", "签发机构"
-    ]
-    if any(w in s for w in bad_words):
-        return False
-    return bool(re.match(r"^[\u4e00-\u9fa5A-Za-z0-9*（）()·.\-]+$", s))
-
-
-def _extract_near_label_name(text: str, labels):
-    lines = _split_lines(text)
-    # 1) 优先取“标签同一行冒号后值”
-    for ln in lines:
-        for lb in labels:
-            m = re.search(rf"{re.escape(lb)}[:：]?\s*([^\n\r:：]+)", ln)
-            if m and _is_name_candidate(m.group(1).strip()):
-                return m.group(1).strip()
-
-    # 2) 再取标签前后邻近行的人名候选
-    for i, ln in enumerate(lines):
-        if any(lb in ln for lb in labels):
-            # 先看上一行，再看下一行，最后再扩大范围
-            for j in [i - 1, i + 1, i - 2, i + 2, i - 3, i + 3]:
-                if 0 <= j < len(lines):
-                    cand = lines[j].strip()
-                    if _is_name_candidate(cand):
-                        return cand
-    return None
-
-
-def _extract_near_label_text(text: str, labels, max_len: int = 60):
-    """
-    通用“标签邻域取值”：用于代理付款行、用途等文本字段。
-    """
-    lines = _split_lines(text)
-    field_words = {"用途", "账号", "申请人", "收款人", "代理付款行", "金额", "客户签章", "业务类型", "付款方式", "币别", "日期"}
-
-    def is_valid(v: str):
-        if not v:
-            return False
-        v = v.strip()
-        if len(v) > max_len:
-            return False
-        if v in field_words:
-            return False
-        # 纯标签词或明显无效词
-        bad = ["流水号", "票据金额", "签发机构", "申请机构", "跨机构申请编号"]
-        if any(b == v for b in bad):
-            return False
-        return True
-
-    # 1) 同行冒号后
-    for ln in lines:
-        for lb in labels:
-            m = re.search(rf"{re.escape(lb)}[:：]?\s*([^\n\r:：]+)", ln)
-            if m:
-                val = m.group(1).strip()
-                if is_valid(val):
-                    return val
-
-    # 2) 邻近行
-    for i, ln in enumerate(lines):
-        if any(lb in ln for lb in labels):
-            for j in [i + 1, i - 1, i + 2, i - 2, i + 3]:
-                if 0 <= j < len(lines):
-                    cand = lines[j].strip()
-                    if is_valid(cand):
-                        return cand
-    return None
-
-
-def _extract_customer_stamp_status(text: str):
-    """
-    客户签章仅输出“有章/无章”：
-    - 识别到明显银行业务章/费用项文本，判为无章（避免误判）
-    - 识别到客户名称类文本，判为有章
-    """
-    lines = _split_lines(text)
-    idxs = [i for i, ln in enumerate(lines) if "客户签章" in ln]
-    if not idxs:
-        return "无章"
-
-    i = idxs[0]
-    nearby = []
-    for j in [i - 1, i, i + 1, i + 2, i + 3]:
-        if 0 <= j < len(lines):
-            nearby.append(lines[j])
-    merged = "|".join(nearby)
-
-    bank_stamp_words = ["业务专用", "专用章", "手续费", "工本费", "对私", "本票", "银行"]
-    if any(w in merged for w in bank_stamp_words):
-        return "无章"
-
-    # 客户章通常可识别出单位名/姓名的部分字符，这里只要有较稳文本则判有章
-    text_tokens = [ln for ln in nearby if ln and "客户签章" not in ln]
-    if any(len(t) >= 2 for t in text_tokens):
-        return "有章"
-
-    return "无章"
-
-
-def extract_benpiao_fields(text: str, spec_fields, file_path=None):
-    """
-    本票字段专用规则
-    """
-    data = {}
-
-    # ===== 调试：输出完整OCR结果 =====
-    if file_path:
-        print(f"\n[OCR调试] 文件: {file_path}")
-        print(f"[OCR调试] 文本长度: {len(text)}")
-        print(f"[OCR调试] 前500字符: {text[:500]}")
-        print(f"[OCR调试] 完整文本:\n{text}\n")
-
-    # ===== 预提取 =====
-    accounts = _extract_account_candidates(text)
-    date_match = re.search(r"\d{4}[年\-/\.]\d{1,2}(?:[月\-/\.]\d{1,2})?", text)
-    amount_num = re.search(r"￥\s*([\d,]+\.\d{2})", text)
-    amount_cn = _extract_amount_upper(text, file_path)
-    print(f"[金额小写原始] {amount_num.group(1) if amount_num else None}")
-    print(f"[金额大写原始] {amount_cn}")
-    amount_cn = _fix_amount_ocr_error(amount_cn)
-    print(f"[金额大写修正] {amount_cn}")
-
-    # ===== 初始化所有本票字段 =====
-    for field in BENPIAO_RULES.keys():
-        data[field] = None
-
-    # ===== 锚点提取（允许跨行少量噪声） =====
-    anchor_rules = {
-        "币别": r"币别[:：]?\s*(人民币|RMB|USD|CNY)",
-        "日期": r"(\d{4}[年\-/\.]\d{1,2}(?:[月\-/\.]\d{1,2})?)",
-        "业务类型": r"(银行本票|银行汇票|本票|汇票)",
-        "付款方式": r"(转账|现金)",
-        "申请人": r"申请人[:：]?\s*([^\n\r:：]{2,40})",
-        "收款人": r"收款人[:：]?\s*([^\n\r:：]{2,40})",
-        "代理付款行": r"代理付款行[:：]?\s*([^\n\r]{2,60})",
-        "用途": r"用途[:：]?\s*([^\n\r]{1,60})",
-        "客户签章": r"客户签章[:：]?\s*([^\n\r]{2,60})",
-    }
-
-    # 先用通用回退规则填充
-    for field in anchor_rules.keys():
-        data[field] = extract_field_value(text, field)
-
-    # 再用本票锚点覆盖
-    for field, rgx in anchor_rules.items():
-        m = re.search(rgx, text)
-        if m:
-            data[field] = m.group(1).strip()
-
-    # ===== 日期处理 =====
-    if data.get("日期"):
-        data["日期"] = _clean_date(data["日期"])
-    elif date_match:
-        data["日期"] = _clean_date(date_match.group(0))
-
-    # ===== 金额处理 =====
-    # 金额小写
-    if amount_num:
-        data["金额小写"] = "￥" + amount_num.group(1).replace(",", "")
-
-    # 金额大写
-    data["金额大写"] = amount_cn
-
-    # ===== 申请人账号 =====
-    m = _extract_account_by_explicit_label(text, ["申请人账号"])
-    block_acc = _extract_account_from_label_block(text, "申请人")
-    if block_acc:
-        data["申请人账号"] = fix_account(block_acc)
-    elif m:
-        data["申请人账号"] = fix_account(m)
-    elif accounts:
-        data["申请人账号"] = fix_account(accounts[-1])
-
-    # ===== 收款人账号 =====
-    m = _extract_account_by_explicit_label(text, ["收款人账号", "收款账号"])
-    data["收款人账号"] = fix_account(m) if m else None
-
-    # ===== 代理付款行（过滤垃圾值） =====
-    if data.get("代理付款行"):
-        v = _extract_near_label_text(text, ["代理付款行"], max_len=80)
-        if v:
-            data["代理付款行"] = v
-
-        # 过滤垃圾值
-        if data.get("代理付款行") in {"用���", "账号", "申请人", "收款人", "金额"}:
-            data["代理付款行"] = None
-        if data.get("代理付款行") and re.fullmatch(r"\d{8,30}", str(data["代理付款行"]).strip()):
-            data["代理付款行"] = None
-        if data.get("代理付款行"):
-            v2 = str(data["代理付款行"]).strip()
-            if not any(k in v2 for k in ["银行", "支行", "分行"]):
-                data["代理付款行"] = None
-
-    # ===== 申请人、收款人（用标签邻域提取） =====
-    if data.get("申请人"):
-        v = _extract_near_label_name(text, ["申请人"])
-        if v:
-            data["申请人"] = v
-
-    if data.get("收款人"):
-        v = _extract_near_label_name(text, ["收款人"])
-        if v:
-            data["收款人"] = v
-
-    # ===== 客户签章 =====
-    if data.get("客户签章"):
-        data["客户签章"] = _extract_customer_stamp_status(text)
-
-    # ===== 签字字段（录入、复核、授权、会计主管） =====
-    if file_path:
-        try:
-            # 转换为图片
-            img = None
-            if file_path.lower().endswith('.pdf'):
-                images = convert_from_path(file_path, dpi=200)
-                if images:
-                    img = images[0]
-            else:
-                img = Image.open(file_path)
-
-            if img:
-                w, h = img.size
-                img_np = np.array(img)
-                res = ocr.ocr(img_np)
-
-                # 收集所有OCR框
-                all_boxes = []
-                for line in res:
-                    for box in line:
-                        text = box[1][0]
-                        coords = box[0]
-                        x_avg = sum([pt[0] for pt in coords]) / len(coords)
-                        y_avg = sum([pt[1] for pt in coords]) / len(coords)
-                        all_boxes.append({'text': text, 'x': x_avg, 'y': y_avg})
-
-                # 🔥 定义签字位置ROI
-                # 从图片看，签字区域在下方，Y坐标应该更靠后
-                # 下移到 0.88 以上，避免和费用项重叠
-                signature_regions = {
-                    "录入": (int(w * 0.0), int(h * 0.88), int(w * 0.3), h),
-                    "复核": (int(w * 0.3), int(h * 0.88), int(w * 0.6), h),
-                    "授权": (int(w * 0.6), int(h * 0.88), int(w * 0.8), h),
-                    "会计主管": (int(w * 0.8), int(h * 0.88), int(w * 1.0), h),
-                }
-
-                # 🔥 垃圾文本过滤词表
-                garbage_words = [
-                    "工本费", "手续费", "对私", "业务", "专用", "常", "00",
-                    "业务专用", "本票工本费", "本票手续费", "客户签章"
-                ]
-
-                # 从各个签字区域提取文本
-                for sig_name, (x1, y1, x2, y2) in signature_regions.items():
-                    region_boxes = [b for b in all_boxes if x1 < b['x'] < x2 and y1 < b['y'] < y2]
-
-                    if region_boxes:
-                        # 提取该区域的文本，按X坐标排序
-                        region_text = "".join([b['text'] for b in sorted(region_boxes, key=lambda x: x['x'])])
-
-                        # 🔥 过滤垃圾文本
-                        original_text = region_text
-                        for garbage in garbage_words:
-                            region_text = region_text.replace(garbage, "")
-
-                        # 过滤掉标签词
-                        region_text = re.sub(r"[录复授会计主管核权人入]", "", region_text).strip()
-
-                        if region_text and len(region_text) > 0:
-                            data[sig_name] = region_text
-                            print(f"[签字提取] {sig_name}: 原始='{original_text}' -> 清理后='{region_text}'")
-                        else:
-                            print(f"[签字提取] {sig_name}: 原始='{original_text}' -> 无签字")
-                    else:
-                        print(f"[签字提取] {sig_name}: 该区域无文本框")
-
-        except Exception as e:
-            print(f"[签字提取] 提取失败: {e}")
-            import traceback
-            traceback.print_exc()
-
-    print(f"[本票提取] 提取完毕，共{len([v for v in data.values() if v is not None])}个字段有值\n")
-    return data
-
-
-def extract_daikuan_fields_v6(file_path):
-    """
-    贷款还款凭证字段提取 - v6 完整修复版
-    处理：竖排文本、表格格子金额、账号原样读取、通用标签定位
-    关键改进：精准Y坐标、严格过滤垃圾、范围查找代替全文搜索
-    """
-    data = {}
-
-    if not file_path:
-        return data
-
-    try:
-        # 转图片并OCR
-        img = None
-        if file_path.lower().endswith('.pdf'):
-            images = convert_from_path(file_path, dpi=250)
-            if images:
-                img = images[0]
-        else:
-            img = Image.open(file_path)
-
-        if not img:
-            return data
-
-        w, h = img.size
-        img_np = np.array(img)
-        res = ocr.ocr(img_np)
-
-        print(f"[贷款凭证v6] 图片大小: {img.size}")
-
-        # ===== 第一步：收集所有OCR框 =====
-        all_boxes = []
-        for line in res:
-            for box in line:
-                text = box[1][0]
-                confidence = box[1][1]
-                coords = box[0]
-
-                x_avg = sum([pt[0] for pt in coords]) / len(coords)
-                y_avg = sum([pt[1] for pt in coords]) / len(coords)
-
-                all_boxes.append({
-                    'text': text,
-                    'x': x_avg,
-                    'y': y_avg,
-                    'confidence': confidence
-                })
-
-        print(f"[收集] 总共 {len(all_boxes)} 个文本框\n")
-
-        # ===== 第二步：按Y坐标分行 =====
-        def group_by_y(boxes, threshold=30):
-            if not boxes:
-                return []
-
-            boxes_sorted = sorted(boxes, key=lambda x: x['y'])
-            rows = []
-            current_row = [boxes_sorted[0]]
-            current_y = boxes_sorted[0]['y']
-
-            for box in boxes_sorted[1:]:
-                if abs(box['y'] - current_y) < threshold:
-                    current_row.append(box)
-                else:
-                    current_row.sort(key=lambda x: x['x'])
-                    rows.append(current_row)
-                    current_row = [box]
-                    current_y = box['y']
-
-            if current_row:
-                current_row.sort(key=lambda x: x['x'])
-                rows.append(current_row)
-
-            return rows
-
-        all_rows = group_by_y(all_boxes, threshold=30)
-        print(f"[分行] 按Y坐标分为 {len(all_rows)} 行\n")
-
-        # ===== 第三步：字段提取 =====
-
-        # 1. 币种（从文本提取）
-        # 🔥 改：从OCR文本提取币种，而不是写死
-        ocr_text = "\n".join([b['text'] for b in all_boxes])
-        currency_match = re.search(r"(人民币|USD|EUR|GBP|JPY|CNY)", ocr_text)
-        data["币种"] = currency_match.group(1) if currency_match else "人民币"
-        print(f"[币种] {data['币种']}")
-
-        # 2. 日期（Y<600）
-        date_found = False
-        for row in all_rows:
-            row_y = row[0]['y'] if row else 0
-            if row_y < 600:
-                row_text = "".join([b['text'] for b in row])
-                m = re.search(r"(\d{4})年(\d{1,2})月(\d{1,2})", row_text)
-                if m:
-                    y, mo, d = m.group(1), m.group(2), m.group(3)
-                    data["日期"] = f"{y}年{int(mo)}月{int(d)}日"
-                    print(f"[日期] {data['日期']}")
-                    date_found = True
-                    break
-
-        if not date_found:
-            data["日期"] = None
-
-        # 3. 产品名称
-        data["产品名称"] = None
-
-        # 4. 名称（找"名"字标签，排除"产品名称"行，从同一行提取企业名）
-        name_found = False
-        for i, row in enumerate(all_rows):
-            row_text = "".join([b['text'] for b in row])
-
-            # 关键：找包含"名"但不包含"产品名称"的行
-            if "名" in row_text and "产品名称" not in row_text and not name_found:
-                # 从这一行提取：名 + 企业名
-                m = re.search(r"名\s*([\u4e00-\u9fa5]{3,40})", row_text)
-                if m:
-                    cand = m.group(1).strip()
-                    # 过滤：不是标签词，长度3-40
-                    if (3 <= len(cand) <= 40 and
-                            not any(x in cand for x in
-                                    ["账号", "银行", "日期", "摘要", "签章", "付款", "贷款", "开户", "币种", "产品",
-                                     "名", "称"])):
-                        data["名称"] = cand
-                        name_found = True
-                        print(f"[名称] {data['名称']}")
-                        break
-
-        if not name_found:
-            data["名称"] = None
-
-        # 5. 付款账号（Y=732）
-        pay_acc_found = False
-        for i, row in enumerate(all_rows):
-            row_text = "".join([b['text'] for b in row])
-            row_y = row[0]['y'] if row else 0
-
-            if "付款账号" in row_text and 700 < row_y < 760 and not pay_acc_found:
-                # 同一行查找
-                m = re.search(r"付款账号[:：]?\s*([\dI\*]{15,})", row_text)
-                if m:
-                    data["付款账号"] = m.group(1)
-                    pay_acc_found = True
-                    print(f"[付款账号] {data['付款账号']} (同行)")
-                    break
-
-                # 上一行查找
-                if not pay_acc_found and i > 0:
-                    prev_text = "".join([b['text'] for b in all_rows[i - 1]])
-                    m = re.search(r"([\dI\*]{15,})", prev_text)
-                    if m:
-                        data["付款账号"] = m.group(1)
-                        pay_acc_found = True
-                        print(f"[付款账号] {data['付款账号']} (上行)")
-                        break
-
-                # 下一行查找
-                if not pay_acc_found and i + 1 < len(all_rows):
-                    next_text = "".join([b['text'] for b in all_rows[i + 1]])
-                    m = re.search(r"([\dI\*]{15,})", next_text)
-                    if m:
-                        data["付款账号"] = m.group(1)
-                        pay_acc_found = True
-                        print(f"[付款账号] {data['付款账号']} (下行)")
-                        break
-
-        if not pay_acc_found:
-            # 兜底：从Y=700-800范围查找最长的数字序列
-            account_region = [b for b in all_boxes if 700 < b['y'] < 800]
-            number_boxes = [b for b in account_region if re.match(r"[\dI\*]{10,}", b['text'])]
-            if number_boxes:
-                longest = max(number_boxes, key=lambda x: len(x['text']))
-                data["付款账号"] = longest['text']
-                pay_acc_found = True
-                print(f"[付款账号] {data['付款账号']} (范围查找)")
-
-        if not pay_acc_found:
-            data["付款账号"] = None
-
-        # 6. 付款开户银行（找"付款账号"，往下找包含"银行"的boxes，按X坐标排序，取第一个）
-        pay_bank_found = False
-        for i, row in enumerate(all_rows):
-            row_text = "".join([b['text'] for b in row])
-
-            if "付款账号" in row_text and not pay_bank_found:
-                # 往下找，找包含"银行"的行
-                for j in range(i + 1, min(i + 5, len(all_rows))):
-                    next_row = all_rows[j]
-
-                    # 🔥 从这一行的所有boxes中找出所有包含"银行"的框
-                    bank_boxes = [b for b in next_row if "银行" in b['text']]
-
-                    if len(bank_boxes) > 0:
-                        # 按X坐标排序，取第一个（左边）
-                        bank_boxes.sort(key=lambda x: x['x'])
-                        data["付款开户银行"] = bank_boxes[0]['text'].strip()
-                        pay_bank_found = True
-                        print(f"[付款开户银行] {data['付款开户银行']}")
-                        break
-
-        if not pay_bank_found:
-            data["付款开户银行"] = None
-
-        # 7. 贷款账号（Y=732同行有两个账号）
-        loan_acc_found = False
-        for i, row in enumerate(all_rows):
-            row_text = "".join([b['text'] for b in row])
-            row_y = row[0]['y'] if row else 0
-
-            if "贷款账号" in row_text and 700 < row_y < 760 and not loan_acc_found:
-                # 同一行查找
-                m = re.search(r"贷款账号[:：]?\s*([\dI\*]{15,})", row_text)
-                if m:
-                    data["贷款账号"] = m.group(1)
-                    loan_acc_found = True
-                    print(f"[贷款账号] {data['贷款账号']} (同行)")
-                    break
-
-                # 上一行查找
-                if not loan_acc_found and i > 0:
-                    prev_text = "".join([b['text'] for b in all_rows[i - 1]])
-                    m = re.search(r"([\dI\*]{15,})", prev_text)
-                    if m:
-                        data["贷款账号"] = m.group(1)
-                        loan_acc_found = True
-                        print(f"[贷款账号] {data['贷款账号']} (上行)")
-                        break
-
-                # 下一行查找
-                if not loan_acc_found and i + 1 < len(all_rows):
-                    next_text = "".join([b['text'] for b in all_rows[i + 1]])
-                    m = re.search(r"([\dI\*]{15,})", next_text)
-                    if m:
-                        data["贷款账号"] = m.group(1)
-                        loan_acc_found = True
-                        print(f"[贷款账号] {data['贷款账号']} (下行)")
-                        break
-
-        if not loan_acc_found:
-            # 兜底：从Y=700-800范围查找第二个最长的数字序列
-            account_region = [b for b in all_boxes if 700 < b['y'] < 800]
-            number_boxes = sorted([b for b in account_region if re.match(r"[\dI\*]{10,}", b['text'])],
-                                  key=lambda x: len(x['text']), reverse=True)
-            if len(number_boxes) > 1:
-                data["贷款账号"] = number_boxes[1]['text']
-                loan_acc_found = True
-                print(f"[贷款账号] {data['贷款账号']} (范围查找)")
-
-        if not loan_acc_found:
-            data["贷款账号"] = None
-
-        # 8. 贷款开户银行（找"贷款账号"，往下找包含"银行"的boxes，按X坐标排序，取第二个）
-        loan_bank_found = False
-        for i, row in enumerate(all_rows):
-            row_text = "".join([b['text'] for b in row])
-
-            if "贷款账号" in row_text and not loan_bank_found:
-                # 往下找，找包含"银行"的行
-                for j in range(i + 1, min(i + 5, len(all_rows))):
-                    next_row = all_rows[j]
-
-                    # 🔥 从这一行的所有boxes中找出所有包含"银行"的框
-                    bank_boxes = [b for b in next_row if "银行" in b['text']]
-
-                    if len(bank_boxes) >= 2:
-                        # 按X坐标排序，取第二个（右边）
-                        bank_boxes.sort(key=lambda x: x['x'])
-                        data["贷款开户银行"] = bank_boxes[1]['text'].strip()
-                        loan_bank_found = True
-                        print(f"[贷款开户银行] {data['贷款开户银行']}")
-                        break
-
-        if not loan_bank_found:
-            data["贷款开户银行"] = None
-
-        # 9. 本次偿还金额（修复：扩大搜索范围和兜底）
-        amount_upper = None
-        amount_small = None
-
-        # 大写金额：在Y=938-948查找
-        amount_upper_region = [b for b in all_boxes if 938 < b['y'] < 948]
-        amount_upper_text = "".join([b['text'] for b in sorted(amount_upper_region, key=lambda x: x['x'])])
-
-        m = re.search(r"(伍佰[^\n]*元[^\n]*分)", amount_upper_text)
-        if m:
-            amount_upper = m.group(1).strip()
-            print(f"[大写金额] {amount_upper}")
-
-        # 小写金额：扩大搜索范围到Y=880-1000（因为可能在表格格子里）
-        number_region = [b for b in all_boxes if 880 < b['y'] < 1000]
-        number_boxes = [b for b in number_region if re.match(r"^\d+$", b['text'])]
-
-        print(f"[小写金额] 数字框: {[b['text'] for b in sorted(number_boxes, key=lambda x: x['x'])]}")
-
-        if number_boxes:
-            all_digits = "".join([b['text'] for b in sorted(number_boxes, key=lambda x: x['x'])])
-            print(f"[小写金额合并] {all_digits}")
-
-            if len(all_digits) >= 3:
-                amount_small = f"¥{all_digits[:-2]}.{all_digits[-2:]}"
-                print(f"[小写金额] {amount_small}")
-        else:
-            print(f"[小写金额] 范围880-1000未找到数字，可能OCR识别失败")
-
-        data["本次偿还金额_小写"] = amount_small
-        data["本次偿还金额_大写"] = _fix_amount_ocr_error(amount_upper) if amount_upper else None
-
-        # 10. 摘要（🔥修复：精确Y范围定位）
-        summary_found = False
-        summary_region = [b for b in all_boxes if 1046 < b['y'] < 1052]
-        summary_text = "".join([b['text'] for b in sorted(summary_region, key=lambda x: x['x'])])
-
-        m = re.search(r"(归还贷款|还款)", summary_text)
-        if m:
-            data["摘要"] = m.group(1).strip()
-            summary_found = True
-            print(f"[摘要] {data['摘要']}")
-
-        if not summary_found:
-            data["摘要"] = None
-
-        # 11. 累计还款
-        data["累计还款"] = None
-
-        # ===== 12-15. 签章和签字 =====
-        lower_boxes = [b for b in all_boxes if b['y'] > 1400]
-        print(f"\n[签章签字区域] 找到 {len(lower_boxes)} 个框")
-
-        # 还款单位签章（左侧，Y=1532有签章标记）
-        try:
-            crop = img.crop((
-                int(w * 0.05), int(h * 0.65),
-                int(w * 0.5), h
-            ))
-            crop_gray = crop.convert("L")
-            crop_np = np.array(crop_gray)
-            dark_ratio = np.sum(crop_np < 150) / crop_np.size
-            print(f"[还款单位签章] 黑色像素占比: {dark_ratio:.2%}")
-            data["还款单位签章"] = "有章" if dark_ratio > 0.05 else "无章"
-        except Exception as e:
-            print(f"[还款单位签章] 判定失败: {e}")
-            data["还款单位签章"] = "无章"
-
-        # 银行签章（右侧）
-        try:
-            crop = img.crop((
-                int(w * 0.5), int(h * 0.65),
-                int(w * 0.95), h
-            ))
-            crop_gray = crop.convert("L")
-            crop_np = np.array(crop_gray)
-            dark_ratio = np.sum(crop_np < 150) / crop_np.size
-            print(f"[银行签章] 黑色像素占比: {dark_ratio:.2%}")
-            data["银行签章"] = "有章" if dark_ratio > 0.05 else "无章"
-        except Exception as e:
-            print(f"[银行签章] 判定失败: {e}")
-            data["银行签章"] = "无章"
-
-        # 签字（经办/复核/授权/主管）
-        data["经办"] = None
-        data["复核"] = None
-        data["授权"] = None
-        data["主管"] = None
-
-        for row in all_rows:
-            row_text = "".join([b['text'] for b in row])
-
-            # 经办
-            if "经办" in row_text:
-                m = re.search(r"经办[:：]?\s*([^\n\r:：】）)]*)", row_text)
-                if m:
-                    val = m.group(1).strip()
-                    val = re.sub(r"[）)】\s，]", "", val)
-                    # 🔥 检测：空白、/、-、标签词
-                    if val and not _is_empty_signature(val):
-                        data["经办"] = val
-                        print(f"[经办] {val}")
-
-            # 复核
-            if "复核" in row_text:
-                m = re.search(r"复核[:：]?\s*([^\n\r:：】）)]*)", row_text)
-                if m:
-                    val = m.group(1).strip()
-                    val = re.sub(r"[）)】\s]", "", val)
-                    # 🔥 检测：空白、/、-、标签词
-                    if val and not _is_empty_signature(val):
-                        data["复核"] = val
-                        print(f"[复核] {val}")
-
-            # 授权
-            if "授权" in row_text:
-                m = re.search(r"授权[:：]?\s*([^\n\r:：】）)]*)", row_text)
-                if m:
-                    val = m.group(1).strip()
-                    val = re.sub(r"[）)】\s]", "", val)
-                    # 🔥 检测：空白、/、-、标签词
-                    if val and not _is_empty_signature(val):
-                        data["授权"] = val
-                        print(f"[授权] {val}")
-
-            # 主管（不要贪心匹配授权）
-            if "主管" in row_text:
-                m = re.search(r"主管[:：]?\s*([^授]*?)(?:授权|$)", row_text)
-                if m:
-                    val = m.group(1).strip()
-                    val = re.sub(r"[）)】\s，]", "", val)
-                    # 🔥 检测：空白、/、-、标签词
-                    if val and not _is_empty_signature(val):
-                        data["主管"] = val
-                        print(f"[主管] {val}")
-
-        print(f"\n[贷款凭证v6] 提取完毕\n")
-        return data
-
-    except Exception as e:
-        print(f"[贷款凭证v6] 提取失败: {e}")
-        import traceback
-        traceback.print_exc()
-        return {}
-
-# ===== 工具函数 =====
-def _is_empty_signature(val: str) -> bool:
-    """
-    判断签字字段是否为空
-    - 纯空白
-    - 全是 / 或 -
-    - 标签词（经办、复核、授权、主管等）
-    """
-    if not val:
-        return True
-
-    # 纯空白
-    if not val.strip():
-        return True
-
-    # 全是 / 或 -
-    if re.match(r"^[/\-\s]+$", val):
-        return True
-
-    # 标签词
-    label_words = {"经办", "复核", "授权", "主管", ""}
-    if val in label_words:
-        return True
-
-    return False
-
-
-def _detect_stamp_in_image(file_path: str, stamp_type: str):
-    """
-    检测图片中是否有签章（盖章）
-    """
-    if not file_path:
-        return None
-
-    try:
-        # 获取图片
-        img = None
-        if file_path.lower().endswith('.pdf'):
-            images = convert_from_path(file_path, dpi=150)
-            if images:
-                img = images[0]
-        else:
-            img = Image.open(file_path)
-
-        if not img:
-            return None
-
-        w, h = img.size
-
-        # 定义ROI（需要根据实际凭证调整）
-        roi_map = {
-            "还款单位签章": (int(w * 0.05), int(h * 0.55), int(w * 0.45), h),
-            "银行签章": (int(w * 0.55), int(h * 0.55), int(w * 0.95), h),
-        }
-
-        if stamp_type not in roi_map:
-            return None
-
-        x1, y1, x2, y2 = roi_map[stamp_type]
-        crop = img.crop((x1, y1, x2, y2))
-
-        # 转为灰度图计算黑色像素（章的特征）
-        crop_gray = crop.convert("L")
-        crop_np = np.array(crop_gray)
-
-        # 印章通常为红色或深色，灰度值较低
-        # 计算像素低于150的占比
-        dark_pixels = np.sum(crop_np < 150)
-        total_pixels = crop_np.size
-        dark_ratio = dark_pixels / total_pixels if total_pixels > 0 else 0
-
-        print(f"[签章检测] {stamp_type} 黑色像素比: {dark_ratio:.2%}")
-
-        # 阈值：如果黑色像素 > 3% 则认为有章
-        if dark_ratio > 0.03:
-            return "有章"
-        else:
-            return "无章"
-
-    except Exception as e:
-        print(f"[签章检测] 检测 {stamp_type} 失败: {e}")
-        return None
-
-
-def _extract_handwriting_text(file_path: str, field_type: str):
-    """
-    提取图片中的手写签字内容（返回识别到的文本）
-    """
-    if not file_path:
-        return None
-
-    try:
-        # 获取图片
-        img = None
-        if file_path.lower().endswith('.pdf'):
-            images = convert_from_path(file_path, dpi=200)
-            if images:
-                img = images[0]
-        else:
-            img = Image.open(file_path)
-
-        if not img:
-            return None
-
-        w, h = img.size
-
-        # 定义ROI（签字位置，需要根据实际凭证调整）
-        roi_map = {
-            "经办": (int(w * 0.1), int(h * 0.75), int(w * 0.4), int(h * 0.95)),
-            "复核": (int(w * 0.4), int(h * 0.75), int(w * 0.7), int(h * 0.95)),
-            "授权": (int(w * 0.05), int(h * 0.85), int(w * 0.35), h),
-            "主管": (int(w * 0.55), int(h * 0.85), int(w * 0.85), h),
-        }
-
-        if field_type not in roi_map:
-            return None
-
-        x1, y1, x2, y2 = roi_map[field_type]
-        crop = img.crop((x1, y1, x2, y2))
-
-        # 用OCR识别该区域的文本（可能是签名、章、或文字）
-        crop_np = np.array(crop)
-        res = ocr.ocr(crop_np)
-
-        # 提取识别文本
-        recognized_text = ""
-        if res:
-            for line in res:
-                for box in line:
-                    text = box[1][0]
-                    confidence = box[1][1]
-                    if confidence > 0.3:  # 降低阈值以捕获手写
-                        recognized_text += text
-
-        recognized_text = recognized_text.strip()
-        print(f"[签字提取] {field_type} 识别文本: '{recognized_text}'")
-
-        # 判断：如果识别到文本或有明显笔画，则返回文本；否则判定为无签字
-        if recognized_text:
-            return recognized_text
-
-        # fallback：检测笔画密度
-        crop_gray = crop.convert("L")
-        crop_np = np.array(crop_gray)
-        dark_pixels = np.sum(crop_np < 150)
-        total_pixels = crop_np.size
-        dark_ratio = dark_pixels / total_pixels if total_pixels > 0 else 0
-
-        if dark_ratio > 0.05:
-            return "有签字"  # 有笔画但未识别出文字
-        else:
-            return None
-
-    except Exception as e:
-        print(f"[签字提取] 提取 {field_type} 失败: {e}")
-        return None
-
-
-def _detect_stamp_in_image(file_path: str, stamp_type: str):
-    """
-    检测图片中是否有签章（盖章）
-    策略：根据stamp_type定位章的区域，然后用OCR识别是否有"章"字或印章相关文本
-    """
-    if not file_path:
-        return None
-
-    try:
-        # 转换为图片
-        img = None
-        if file_path.lower().endswith('.pdf'):
-            images = convert_from_path(file_path, dpi=150)
-            if images:
-                img = images[0]
-        else:
-            img = Image.open(file_path)
-
-        if not img:
-            return None
-
-        w, h = img.size
-
-        # 根据签章位置定义ROI
-        # 注：这个需要根据实际凭证布局调整
-        roi_map = {
-            "还款单位签章": (0, int(h * 0.55), int(w * 0.5), h),  # 左下区域
-            "银行签章": (int(w * 0.5), int(h * 0.55), w, h),  # 右下区域
-        }
-
-        if stamp_type not in roi_map:
-            return None
-
-        x1, y1, x2, y2 = roi_map[stamp_type]
-        crop = img.crop((x1, y1, x2, y2))
-
-        # OCR识别
-        crop_np = np.array(crop)
-        res = ocr.ocr(crop_np)
-
-        stamp_text = ocr_to_text(res)
-        print(f"[签章检测] {stamp_type} 区域识别文本: {stamp_text[:50]}")
-
-        # 判断：如果识别到"章"、"印鉴"、"公章"等关键词，则判为有章
-        if any(kw in stamp_text for kw in ["章", "印", "公章", "法人", "行业务"]):
-            return "有章"
-        else:
-            return "无章"
-
-    except Exception as e:
-        print(f"[签章检测] 检测 {stamp_type} 失败: {e}")
-        return None
-
-
-def _detect_handwriting_in_image(file_path: str, field_type: str):
-    """
-    检测图片中是否有手写签字
-    策略：根据field_type定位签字区域，识别是否有手写痕迹（可用笔画密度判断）
-    """
-    if not file_path:
-        return None
-
-    try:
-        # 转换为图片
-        img = None
-        if file_path.lower().endswith('.pdf'):
-            images = convert_from_path(file_path, dpi=150)
-            if images:
-                img = images[0]
-        else:
-            img = Image.open(file_path)
-
-        if not img:
-            return None
-
-        w, h = img.size
-
-        # 根据签字位置定义ROI
-        roi_map = {
-            "经办": (int(w * 0.15), int(h * 0.75), int(w * 0.45), h),
-            "复核": (int(w * 0.45), int(h * 0.75), int(w * 0.75), h),
-            "授权": (int(w * 0.05), int(h * 0.85), int(w * 0.35), h),
-            "主管": (int(w * 0.55), int(h * 0.85), int(w * 0.85), h),
-        }
-
-        if field_type not in roi_map:
-            return None
-
-        x1, y1, x2, y2 = roi_map[field_type]
-        crop = img.crop((x1, y1, x2, y2))
-
-        # 转灰度，计算笔画密度
-        crop_gray = crop.convert("L")
-        crop_np = np.array(crop_gray)
-
-        # 简单启发式：黑色像素（<200）占比 > 5% 认为有签字
-        dark_pixels = np.sum(crop_np < 200)
-        total_pixels = crop_np.size
-        dark_ratio = dark_pixels / total_pixels if total_pixels > 0 else 0
-
-        print(f"[签字检测] {field_type} 黑色像素比: {dark_ratio:.2%}")
-
-        if dark_ratio > 0.05:
-            return "有签字"
-        else:
-            return "无签字"
-
-    except Exception as e:
-        print(f"[签字检测] 检测 {field_type} 失败: {e}")
-        return None
 
 
 def detect_doc_type(text: str) -> str:
@@ -1676,155 +327,10 @@ def detect_doc_type(text: str) -> str:
     if "贷款还款凭证" in text or "还款凭证" in text:
         return "daikuan"
 
-    # 兜底（弱特征）
     if "贷款账号" in text and "本次偿还金额" in text:
         return "daikuan"
 
     return "unknown"
-
-# ================== 提取 + 校验 ==================
-# ================== 凭证规则定义 ==================
-BENPIAO_RULES = {
-    "币别": {"required": True},
-    "日期": {"required": True},
-    "业务类型": {"required": True},
-    "付款方式": {"required": True},
-    "申请人": {"required": True},
-    "申请人账号": {"required": True},
-    "用途": {"required": True},
-    "收款人": {"required": True},
-    "收款人账号": {"required": True},
-    "代理付款行": {"required": True},
-    "金额大写": {"required": True},
-    "金额小写": {"required": True},
-    "客户签章": {"required": True},
-    "录入": {"required": False},
-    "复核": {"required": False},
-    "授权": {"required": False},
-    "会计主管": {"required": False},
-}
-
-DAIKUAN_RULES = {
-    "日期": {"required": True},
-    "币种": {"required": True},
-    "产品名称": {"required": False},
-    "名称": {"required": True},
-    "付款账号": {"required": True},
-    "付款开户银行": {"required": True},
-    "贷款账号": {"required": True},
-    "贷款开户银行": {"required": True},
-    "本次偿还金额_小写": {"required": True},
-    "本次偿还金额_大写": {"required": True},
-    "摘要": {"required": True},
-    "累计还款": {"required": False},
-    "还款单位签章": {"required": False},  # 条件必填，暂按非必填处理
-    "银行签章": {"required": False},
-    "经办": {"required": True},
-    "复核": {"required": False},
-    "授权": {"required": False},
-    "主管": {"required": False},
-}
-
-
-def extract_and_validate(text, spec_fields, file_path=None, sheet_name: str = "", doc_type: str = "unknown"):
-    check = {}
-    is_benpiao = (doc_type == "benpiao")
-    is_daikuan = (doc_type == "daikuan")
-
-    # ===== 第一步：提取数据 =====
-    if is_benpiao:
-        data = extract_benpiao_fields(text, spec_fields, file_path)
-        # 🔥 补全缺失的本票字段
-        for field in BENPIAO_RULES.keys():
-            if field not in data:
-                data[field] = None
-    elif is_daikuan:
-        data = extract_daikuan_fields_v6(file_path)
-        # 🔥 补全缺失的贷款字段
-        for field in DAIKUAN_RULES.keys():
-            if field not in data:
-                data[field] = None
-    else:
-        data = {}
-
-    # ===== 第二步：选择规则 =====
-    if is_benpiao:
-        rules = BENPIAO_RULES
-    elif is_daikuan:
-        rules = DAIKUAN_RULES
-    else:
-        rules = {}
-
-    # ===== 第三步：根据规则检查每个字段 =====
-    for field_name, rule in rules.items():
-        value = data.get(field_name)
-        required = rule.get("required", False)
-
-        # 账号纠错
-        if field_name in ["账号", "收款账号", "申请人账号", "收款人账号", "付款账号", "贷款账号"]:
-            value = fix_account(value) if value else None
-            data[field_name] = value
-
-        # 检查逻辑
-        if not value:
-            if required:
-                check[field_name] = "FAIL-缺失"
-            else:
-                check[field_name] = "PASS"
-        else:
-            check[field_name] = "PASS"
-
-    # ===== 第四步：特殊检查 =====
-    # 本票：金额大小写一致性
-    if is_benpiao:
-        amount_small = data.get("金额小写")
-        amount_large = data.get("金额大写")
-
-        if amount_small and amount_large:
-            try:
-                num_match = re.search(r"(\d+\.\d{2})", str(amount_small))
-                if num_match:
-                    num = num_match.group(1)
-                    expected_upper = _money_to_upper(num)
-                    if expected_upper:
-                        a = _normalize_upper_amount_text(amount_large)
-                        b = _normalize_upper_amount_text(expected_upper)
-                        check["金额大小写一致性"] = "一致" if a == b else "不一致"
-                    else:
-                        check["金额大小写一致性"] = "无法校验"
-                else:
-                    check["金额大小写一致性"] = "无法提取数值"
-            except Exception as e:
-                check["金额大小写一致性"] = f"校验失败: {e}"
-        else:
-            check["金额大小写一致性"] = "FAIL-缺失金额"
-
-    # 贷款凭证：金额大小写一致性
-    if is_daikuan:
-        amount_small = data.get("本次偿还金额_小写")
-        amount_large = data.get("本次偿还金额_大写")
-
-        if amount_small and amount_large:
-            try:
-                num_match = re.search(r"(\d+\.\d{2})", str(amount_small))
-                if num_match:
-                    num = num_match.group(1)
-                    expected_upper = _money_to_upper(num)
-                    if expected_upper:
-                        a = _normalize_upper_amount_text(amount_large)
-                        b = _normalize_upper_amount_text(expected_upper)
-                        check["金额一致性"] = "一致" if a == b else "不一致"
-                    else:
-                        check["金额一致性"] = "无法校验"
-                else:
-                    check["金额一致性"] = "无法提取数值"
-            except Exception as e:
-                check["金额一致性"] = f"校验失败: {e}"
-        else:
-            check["金额一致性"] = "FAIL-缺失金额"
-
-    return data, check
-
 
 
 # ================== 主程序 ==================
@@ -1860,7 +366,6 @@ def process_one_folder(folder: str):
         doc_type = detect_doc_type(text)
         print(f"识别类型: {doc_type}")
 
-        # 🔥 直接调用，不需要spec_fields
         data, check = extract_and_validate(text, [], f, sheet_name="", doc_type=doc_type)
 
         data["文件名"] = os.path.basename(f)
@@ -1869,7 +374,6 @@ def process_one_folder(folder: str):
         all_data.append(data)
         all_check.append(check)
 
-        # 🔥 根据doc_type生成检查长表
         if doc_type == "benpiao":
             fields = list(BENPIAO_RULES.keys())
             amount_field = "金额大小写一致性"
@@ -1880,7 +384,6 @@ def process_one_folder(folder: str):
             fields = []
             amount_field = None
 
-        # 普通字段检查
         for field in fields:
             all_check_long.append(
                 {
@@ -1891,11 +394,10 @@ def process_one_folder(folder: str):
                 }
             )
 
-        # 金额一致性检查
         if amount_field and amount_field in check:
             if doc_type == "benpiao":
                 amount_value = f"小写={data.get('金额小写')}, 大写={data.get('金额大写')}"
-            else:  # daikuan
+            else:
                 amount_value = f"小写={data.get('本次偿还金额_小写')}, 大写={data.get('本次偿还金额_大写')}"
 
             all_check_long.append(
@@ -1907,7 +409,6 @@ def process_one_folder(folder: str):
                 }
             )
 
-    # ================== 输出Excel ==================
     df_data = pd.DataFrame(all_data)
     df_check = pd.DataFrame(all_check)
     df_check_long = pd.DataFrame(all_check_long)
