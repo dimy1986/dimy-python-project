@@ -16,6 +16,7 @@ from PyInstaller.utils.hooks import collect_all, collect_data_files, collect_sub
 # ── Collect paddleocr (binaries + data + submodules) ──────────────────────────
 paddle_datas, paddle_binaries, paddle_hiddenimports = collect_all('paddle')
 paddleocr_datas, paddleocr_binaries, paddleocr_hiddenimports = collect_all('paddleocr')
+imageio_datas, imageio_binaries, imageio_hiddenimports = collect_all('imageio')
 
 # ── Cython data files (Utility/*.cpp etc.) referenced at runtime by paddle ────
 cython_datas = collect_data_files('Cython')
@@ -85,11 +86,12 @@ extra_hiddenimports = [
 a = Analysis(
     ['main.py'],
     pathex=['.'],
-    binaries=paddle_binaries + paddleocr_binaries,
-    datas=paddle_datas + paddleocr_datas + cython_datas,
+    binaries=paddle_binaries + paddleocr_binaries + imageio_binaries,
+    datas=paddle_datas + paddleocr_datas + imageio_datas + cython_datas,
     hiddenimports=(
         paddle_hiddenimports
         + paddleocr_hiddenimports
+        + imageio_hiddenimports
         + extra_hiddenimports
     ),
     hookspath=[],
