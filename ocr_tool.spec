@@ -65,6 +65,7 @@ extra_hiddenimports = [
     'pathlib',
     'io',
     're',
+    'imghdr',
     # packaging helpers required by paddleocr at runtime
     'setuptools',
     'pkg_resources',
