@@ -16,6 +16,8 @@ if exist "%~dp0venv\Scripts\activate.bat" (
     call "%~dp0venv\Scripts\activate.bat"
 ) else if exist "%~dp0..\venv\Scripts\activate.bat" (
     call "%~dp0..\venv\Scripts\activate.bat"
+) else if exist "D:\python_projects\ocr_read\venv_clean\Scripts\activate.bat" (
+    call "D:\python_projects\ocr_read\venv_clean\Scripts\activate.bat"
 ) else (
     echo [WARN] No venv found -- using system Python.
 )
