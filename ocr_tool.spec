@@ -49,6 +49,9 @@ extra_hiddenimports = [
     'scipy.special',
     'skimage',
     'skimage.morphology',
+    # imgaug (used by paddleocr data augmentation pipelines)
+    'imgaug',
+    'imgaug.augmenters',
     # shapely / pyclipper (used by paddleocr post-processing)
     'shapely',
     'shapely.geometry',
