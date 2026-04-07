@@ -3,8 +3,10 @@
 #   pip install paddlepaddle==2.6.2
 # For GPU support install the matching paddlepaddle-gpu wheel from:
 #   https://www.paddlepaddle.org.cn/install/quick
+# NOTE: paddleocr must be pinned to ==2.7.3 — versions >=2.8 depend on paddlex which
+#       requires PaddlePaddle 3.x (calls set_optimization_level, absent in 2.6.x)
 paddlepaddle==2.6.2
-paddleocr>=2.7.3
+paddleocr==2.7.3
 
 # Image processing
 numpy
