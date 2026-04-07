@@ -62,6 +62,11 @@ extra_hiddenimports = [
     'pathlib',
     'io',
     're',
+    # packaging helpers required by paddleocr at runtime
+    'setuptools',
+    'pkg_resources',
+    'distutils',
+    'distutils.version',
 ]
 
 a = Analysis(
@@ -84,8 +89,6 @@ a = Analysis(
         'IPython',
         'notebook',
         'pytest',
-        'setuptools',
-        'distutils',
     ],
     noarchive=False,
     optimize=0,
