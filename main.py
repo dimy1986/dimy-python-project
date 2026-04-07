@@ -26,6 +26,14 @@ os.environ.setdefault("FLAGS_use_onednn", "0")
 os.environ.setdefault("FLAGS_enable_pir_api", "0")
 os.environ.setdefault("FLAGS_use_pir_executor", "0")
 
+# ── 抑制 paddle/glog 的 stderr/console 输出 ───────────────────────────────────
+# console=False 只抑制 Python 的 console；paddle 底层使用 glog，若不设置，
+# glog 会在 Windows 上触发新建 console 窗口（即"黑框"闪现）。
+os.environ.setdefault("GLOG_logtostderr", "0")        # 不写 stderr
+os.environ.setdefault("GLOG_minloglevel", "3")        # 只输出 FATAL（3），屏蔽 INFO/WARNING/ERROR
+os.environ.setdefault("GLOG_v", "0")                  # 关闭 verbose logging
+os.environ.setdefault("FLAGS_call_stack_level", "0")  # 不打印 paddle 调用栈
+
 # ── 修复 paddleocr 的相对导入问题 ─────────────────────────────────────────────
 try:
     import paddleocr as paddle_module
@@ -87,13 +95,23 @@ for _s in (sys.stdout, sys.stderr):
         except Exception:
             pass
 
+# ── 日志初始化 ─────────────────────────────────────────────────────────────────
+# paddle 在 import 时已经向 root logger 添加了 handler，导致 basicConfig() 是
+# no-op（Python 文档：root logger 已有 handler 时 basicConfig 什么都不做）。
+# 用 force=True 强制重置，并直接操作 root logger 以确保 FileHandler 生效。
+_log_file = os.path.join(
+    os.path.dirname(sys.executable) if getattr(sys, 'frozen', False)
+    else os.path.dirname(os.path.abspath(__file__)),
+    'ocr_app.log'
+)
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('ocr_app.log', encoding='utf-8'),  # 输出到文件便于调试
-        logging.StreamHandler()
-    ]
+        logging.FileHandler(_log_file, encoding='utf-8'),
+        logging.StreamHandler(),
+    ],
+    force=True,   # 强制清除 paddle 已添加的 handler，确保 FileHandler 生效
 )
 
 
@@ -177,7 +195,32 @@ def _init_ocr():
 try:
     _init_ocr()
 except Exception as e:
-    logging.error(f"未找到可用OCR引擎: {e}")
+    import traceback as _tb2
+    _msg2 = (
+        "=" * 60 + "\n"
+        "[FATAL] OCR初始化失败，程序无法启动。\n"
+        f"错误类型: {type(e).__name__}\n"
+        f"错误信息: {e}\n"
+        f"OCR基础目录: {EXTERNAL_OCR_BASE}\n"
+        "Traceback:\n" + _tb2.format_exc() +
+        "=" * 60
+    )
+    logging.error(_msg2)
+    _write_crash(_msg2)
+    try:
+        import tkinter as _tk2
+        import tkinter.messagebox as _mb2
+        _root2 = _tk2.Tk()
+        _root2.withdraw()
+        _mb2.showerror(
+            "启动失败 — 请查看 crash.log",
+            f"OCR初始化失败，程序无法启动。\n\n"
+            f"错误: {type(e).__name__}: {e}\n\n"
+            "完整信息已写入 crash.log，请将该文件发给技术支持。"
+        )
+        _root2.destroy()
+    except Exception:
+        pass
     sys.exit(1)
 
 # ================== 注入OCR实例到提取模块 ==================
