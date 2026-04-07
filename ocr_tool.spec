@@ -16,7 +16,17 @@ from PyInstaller.utils.hooks import collect_all, collect_data_files, collect_sub
 # ── Collect paddleocr (binaries + data + submodules) ──────────────────────────
 paddle_datas, paddle_binaries, paddle_hiddenimports = collect_all('paddle')
 paddleocr_datas, paddleocr_binaries, paddleocr_hiddenimports = collect_all('paddleocr')
-imageio_datas, imageio_binaries, imageio_hiddenimports = collect_all('imageio')
+
+# ── Collect packages that have C extensions or whose dist-info is queried ─────
+# by paddleocr at runtime via importlib.metadata / pkg_resources.
+# Using collect_all() ensures both the compiled extension (.pyd/.so) AND the
+# package metadata (.dist-info directory) end up inside _internal/, preventing
+# PackageNotFoundError / ModuleNotFoundError at startup.
+imageio_datas,   imageio_binaries,   imageio_hiddenimports   = collect_all('imageio')
+lmdb_datas,      lmdb_binaries,      lmdb_hiddenimports      = collect_all('lmdb')
+skimage_datas,   skimage_binaries,   skimage_hiddenimports   = collect_all('skimage')
+pyclipper_datas, pyclipper_binaries, pyclipper_hiddenimports = collect_all('pyclipper')
+shapely_datas,   shapely_binaries,   shapely_hiddenimports   = collect_all('shapely')
 
 # ── Cython data files (Utility/*.cpp etc.) referenced at runtime by paddle ────
 cython_datas = collect_data_files('Cython')
@@ -48,15 +58,17 @@ extra_hiddenimports = [
     'scipy.ndimage._interpolation',
     'scipy.spatial',
     'scipy.special',
-    'skimage',
-    'skimage.morphology',
     # imgaug (used by paddleocr data augmentation pipelines)
     'imgaug',
     'imgaug.augmenters',
-    # shapely / pyclipper (used by paddleocr post-processing)
+    # lmdb, shapely, pyclipper, skimage — covered by collect_all() above;
+    # list top-level names here as a belt-and-suspenders guard.
+    'lmdb',
     'shapely',
     'shapely.geometry',
     'pyclipper',
+    'skimage',
+    'skimage.morphology',
     # PyMuPDF
     'fitz',
     # pandas / openpyxl (Excel output)
@@ -86,12 +98,16 @@ extra_hiddenimports = [
 a = Analysis(
     ['main.py'],
     pathex=['.'],
-    binaries=paddle_binaries + paddleocr_binaries + imageio_binaries,
-    datas=paddle_datas + paddleocr_datas + imageio_datas + cython_datas,
+    binaries=paddle_binaries + paddleocr_binaries + imageio_binaries + lmdb_binaries + skimage_binaries + pyclipper_binaries + shapely_binaries,
+    datas=paddle_datas + paddleocr_datas + imageio_datas + lmdb_datas + skimage_datas + pyclipper_datas + shapely_datas + cython_datas,
     hiddenimports=(
         paddle_hiddenimports
         + paddleocr_hiddenimports
         + imageio_hiddenimports
+        + lmdb_hiddenimports
+        + skimage_hiddenimports
+        + pyclipper_hiddenimports
+        + shapely_hiddenimports
         + extra_hiddenimports
     ),
     hookspath=[],
