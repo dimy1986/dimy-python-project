@@ -1,9 +1,17 @@
 @echo off
 chcp 65001 > nul
-set PYTHON=%~dp0python.exe
-set SCRIPT=%~dp0your_script.py
-set DIST=%~dp0dist\
+cd /d "%~dp0"
 
-if not exist "%DIST%" mkdir "%DIST%"
+REM Quick one-command build using the spec file.
+REM For full control use build_advanced.bat instead.
 
-pyinstaller --onefile --distpath "%DIST%" "%SCRIPT%"
+pyinstaller --noconfirm --clean ocr_tool.spec
+
+if errorlevel 1 (
+    echo Build failed.
+    pause
+    exit /b 1
+)
+
+echo Done. See dist\ocr_tool\ocr_tool.exe
+pause
