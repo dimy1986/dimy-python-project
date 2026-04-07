@@ -32,11 +32,19 @@ import numpy as np
 import cv2
 
 # ================== 日志 ==================
+# 在 Windows GBK 控制台下确保 stdout/stderr 能输出 UTF-8（如 ✓ ✗ 等字符）
+for _s in (sys.stdout, sys.stderr):
+    if hasattr(_s, 'reconfigure'):
+        try:
+            _s.reconfigure(encoding='utf-8', errors='replace')
+        except Exception:
+            pass
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('ocr_app.log'),  # 输出到文件便于调试
+        logging.FileHandler('ocr_app.log', encoding='utf-8'),  # 输出到文件便于调试
         logging.StreamHandler()
     ]
 )
