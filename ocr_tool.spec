@@ -41,6 +41,12 @@ extra_hiddenimports = [
     'PIL.ImageFont',
     # numpy / scipy
     'numpy',
+    'scipy',
+    'scipy.ndimage',
+    'scipy.ndimage._filters',
+    'scipy.ndimage._interpolation',
+    'scipy.spatial',
+    'scipy.special',
     'skimage',
     'skimage.morphology',
     # shapely / pyclipper (used by paddleocr post-processing)
@@ -89,7 +95,6 @@ a = Analysis(
     excludes=[
         # Exclude heavy unused packages to keep build size down
         'matplotlib',
-        'scipy',
         'IPython',
         'notebook',
         'pytest',
