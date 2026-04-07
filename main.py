@@ -3,16 +3,69 @@
 
 import os
 import sys
-# 修复 paddleocr 的相对导入问题
-import paddleocr as paddle_module
-paddle_path = os.path.dirname(paddle_module.__file__)
-if paddle_path not in sys.path:
-    sys.path.insert(0, paddle_path)
+
+# ── 早期崩溃日志：在任何重量级 import 之前建立，确保错误信息能写到磁盘 ──────
+def _write_crash(msg: str):
+    """将崩溃信息写入与 exe（或脚本）同级的 crash.log，并同时尝试输出到 stderr。"""
+    try:
+        base = os.path.dirname(sys.executable if getattr(sys, 'frozen', False) else os.path.abspath(__file__))
+        crash_path = os.path.join(base, 'crash.log')
+        with open(crash_path, 'a', encoding='utf-8', errors='replace') as f:
+            f.write(msg + '\n')
+    except Exception:
+        pass
+    try:
+        print(msg, file=sys.stderr)
+    except Exception:
+        pass
+
+# ── Paddle 在部分 Windows CPU 环境会触发 oneDNN/MKLDNN 相关报错 ──────────────
+# 必须在 import paddle/paddleocr 之前设置，否则 paddle 初始化时已读取过环境变量
+os.environ.setdefault("FLAGS_use_mkldnn", "0")
+os.environ.setdefault("FLAGS_use_onednn", "0")
+os.environ.setdefault("FLAGS_enable_pir_api", "0")
+os.environ.setdefault("FLAGS_use_pir_executor", "0")
+
+# ── 修复 paddleocr 的相对导入问题 ─────────────────────────────────────────────
+try:
+    import paddleocr as paddle_module
+    paddle_path = os.path.dirname(paddle_module.__file__)
+    if paddle_path not in sys.path:
+        sys.path.insert(0, paddle_path)
+except Exception as _e:
+    import traceback as _tb
+    _msg = (
+        "=" * 60 + "\n"
+        "[FATAL] import paddleocr 失败，程序无法启动。\n"
+        f"错误类型: {type(_e).__name__}\n"
+        f"错误信息: {_e}\n"
+        f"Python 版本: {sys.version}\n"
+        f"sys.path:\n" + "\n".join(f"  {p}" for p in sys.path) + "\n"
+        "Traceback:\n" + _tb.format_exc() +
+        "=" * 60
+    )
+    _write_crash(_msg)
+    # 在 GUI 模式下用 tkinter 弹窗展示错误（console=False 时无命令行输出）
+    try:
+        import tkinter as _tk
+        import tkinter.messagebox as _mb
+        _root = _tk.Tk()
+        _root.withdraw()
+        _mb.showerror(
+            "启动失败 — 请查看 crash.log",
+            f"import paddleocr 失败，程序无法启动。\n\n"
+            f"错误: {type(_e).__name__}: {_e}\n\n"
+            "完整信息已写入 crash.log，请将该文件发给技术支持。"
+        )
+        _root.destroy()
+    except Exception:
+        pass
+    sys.exit(1)
+
 import re
 import logging
 import importlib
 import string
-import sys  # ← 添加这行
 from datetime import datetime
 import pandas as pd
 import traceback
@@ -20,12 +73,6 @@ import tkinter as tk
 from tkinter import filedialog, messagebox
 import threading
 from pathlib import Path
-
-# Paddle 在部分 Windows CPU 环境会触发 oneDNN/MKLDNN 相关报错
-os.environ.setdefault("FLAGS_use_mkldnn", "0")
-os.environ.setdefault("FLAGS_use_onednn", "0")
-os.environ.setdefault("FLAGS_enable_pir_api", "0")
-os.environ.setdefault("FLAGS_use_pir_executor", "0")
 
 from PIL import Image
 import numpy as np
