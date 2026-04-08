@@ -23,11 +23,13 @@ if not exist .venv (
         pause
         exit /b 1
     )
-    echo       虚拟环境已创建：.venv) else (
-    echo       复用已有虚拟环境：.venv)
+    echo       虚拟环境已创建：.venv\
+) else (
+    echo       复用已有虚拟环境：.venv\
+)
 
 :: 激活虚拟环境
-call .venv\Scriptsctivate.bat
+call .venv\Scripts\activate.bat
 if errorlevel 1 (
     echo [错误] 虚拟环境激活失败
     pause
@@ -63,10 +65,25 @@ if errorlevel 1 (
     exit /b 1
 )
 
+:: 将 config.ini 复制到输出目录
+echo [5/5] 复制配置文件...
+if exist config.ini (
+    copy /y config.ini dist\query_system\config.ini >nul
+    echo       config.ini 已复制到 dist\query_system\
+) else if exist config.ini.example (
+    copy /y config.ini.example dist\query_system\config.ini.example >nul
+    echo [提示] 未找到 config.ini，已复制 config.ini.example 到 dist\query_system\
+    echo         请在 dist\query_system\ 中将 config.ini.example 改名为 config.ini 并填写实际参数
+) else (
+    echo [警告] 没有找到 config.ini 或 config.ini.example，请手动将 config.ini 复制到 dist\query_system\
+)
+
 echo.
 echo ============================================================
 echo   打包成功！
-echo   输出目录：dist\query_systemecho   请将整个 dist\query_system\ 文件夹拷贝到目标电脑
+echo   输出目录：dist\query_system\
+echo   请将整个 dist\query_system\ 文件夹拷贝到目标电脑
 echo   目标电脑上双击 query_system.exe 即可启动
 echo ============================================================
 pause
+
