@@ -196,6 +196,17 @@ def query_db(
     :returns:      查询结果，每行为一个字典
     """
     cursor = conn.cursor()
+    # pyhive 内部用 Python 的 % 格式化来替换 %s 占位符。
+    # 若 SQL 中存在 Hive 日期格式化函数的格式串（如 '%Y%m%d'、'%m' 等），
+    # 这些字面量 % 会被 pyhive 误作格式说明符，导致
+    # "not enough arguments for format string" 错误。
+    # 解决方法：
+    #   1. 先将所有 %s 占位符替换为不可能出现在 SQL 中的临时令牌
+    #   2. 将剩余的所有字面量 % 转义为 %%
+    #   3. 将临时令牌还原为 %s
+    if params:
+        _PLACEHOLDER = "\x00__PYHIVE_PARAM__\x00"
+        sql = sql.replace("%s", _PLACEHOLDER).replace("%", "%%").replace(_PLACEHOLDER, "%s")
     cursor.execute(sql, params if params else None)
     if not cursor.description:
         return []
