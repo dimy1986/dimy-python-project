@@ -1,0 +1,107 @@
+{% extends "base.html" %}
+{% block title %}交易信息查询{% endblock %}
+
+{% block content %}
+<div class="card">
+  <div class="card-title">交易信息查询</div>
+  <form method="POST" action="{{ url_for('transaction_query') }}">
+    <div class="form-row" style="margin-bottom:14px;">
+      <div class="form-group">
+        <label>开始日期</label>
+        <input type="date" name="date_from" value="{{ date_from }}" required>
+      </div>
+      <div class="form-group">
+        <label>结束日期</label>
+        <input type="date" name="date_to" value="{{ date_to }}" required>
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>查询类型</label>
+        <select name="search_type">
+          <option value="account_no"   {% if search_type == 'account_no'   %}selected{% endif %}>按账号</option>
+          <option value="customer_no"  {% if search_type == 'customer_no'  %}selected{% endif %}>按客户号</option>
+          <option value="account_name" {% if search_type == 'account_name' %}selected{% endif %}>按户名</option>
+        </select>
+      </div>
+      <div class="form-group" style="flex:1; min-width:220px;">
+        <label>查询关键词（支持模糊匹配）</label>
+        <input type="text" name="keyword" value="{{ keyword }}"
+               placeholder="请输入客户号、账号或户名" autocomplete="off">
+      </div>
+      <div class="form-group">
+        <label>&nbsp;</label>
+        <button type="submit" class="btn btn-primary">🔍 查询</button>
+      </div>
+    </div>
+  </form>
+</div>
+
+{% if searched %}
+<div class="card">
+  <div class="card-title">查询结果</div>
+
+  {% if error %}
+  <div class="alert alert-danger">{{ error }}</div>
+  {% elif results %}
+  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+    <div class="result-info">
+      共找到 <span>{{ results|length }}</span> 条交易记录
+      （{{ date_from }} 至 {{ date_to }}）
+    </div>
+    <form method="POST" action="{{ url_for('transaction_download') }}">
+      <input type="hidden" name="date_from"   value="{{ date_from }}">
+      <input type="hidden" name="date_to"     value="{{ date_to }}">
+      <input type="hidden" name="keyword"     value="{{ keyword }}">
+      <input type="hidden" name="search_type" value="{{ search_type }}">
+      <button type="submit" class="btn btn-success">⬇ 下载 Excel</button>
+    </form>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>交易日期</th>
+          <th>交易时间</th>
+          <th>账号</th>
+          <th>户名</th>
+          <th>客户号</th>
+          <th>交易类型</th>
+          <th>金额（元）</th>
+          <th>借贷</th>
+          <th>交易后余额</th>
+          <th>渠道</th>
+          <th>摘要</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in results %}
+        <tr>
+          <td>{{ row.trans_date }}</td>
+          <td>{{ row.trans_time }}</td>
+          <td>{{ row.account_no }}</td>
+          <td>{{ row.account_name }}</td>
+          <td>{{ row.customer_no }}</td>
+          <td>{{ row.trans_type }}</td>
+          <td style="text-align:right;">{{ "%.2f"|format(row.amount) }}</td>
+          <td>
+            {% if row.direction == '借' %}
+              <span class="badge badge-debit">借</span>
+            {% else %}
+              <span class="badge badge-credit">贷</span>
+            {% endif %}
+          </td>
+          <td style="text-align:right;">{{ "%.2f"|format(row.balance_after) }}</td>
+          <td>{{ row.channel }}</td>
+          <td>{{ row.remark }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="alert alert-warning">未查询到符合条件的交易记录，请调整查询条件后重试。</div>
+  {% endif %}
+</div>
+{% endif %}
+{% endblock %}

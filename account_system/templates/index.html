@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}首页 — 账户与交易查询系统{% endblock %}
+
+{% block content %}
+<div class="hero">
+  <h1>账户与交易查询系统</h1>
+  <p>内网专用 · 支持账户信息查询和交易流水查询，结果可导出 Excel</p>
+  <div class="hero-cards">
+    <a href="{{ url_for('account_query') }}" class="hero-card">
+      <div class="icon">👤</div>
+      <h2>账户信息查询</h2>
+      <p>按账号或户名检索账户基本信息，支持模糊匹配，结果可下载</p>
+    </a>
+    <a href="{{ url_for('transaction_query') }}" class="hero-card">
+      <div class="icon">📋</div>
+      <h2>交易信息查询</h2>
+      <p>按时间范围 + 客户号 / 账号 / 户名 查询交易流水，结果可下载</p>
+    </a>
+  </div>
+</div>
+{% endblock %}

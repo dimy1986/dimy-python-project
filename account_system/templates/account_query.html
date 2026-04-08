@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% block title %}账户信息查询{% endblock %}
+
+{% block content %}
+<div class="card">
+  <div class="card-title">账户信息查询</div>
+  <form method="POST" action="{{ url_for('account_query') }}">
+    <div class="form-row">
+      <div class="form-group">
+        <label>查询类型</label>
+        <select name="search_type">
+          <option value="account_no"   {% if search_type == 'account_no'   %}selected{% endif %}>按账号</option>
+          <option value="account_name" {% if search_type == 'account_name' %}selected{% endif %}>按户名</option>
+        </select>
+      </div>
+      <div class="form-group" style="flex:1; min-width:220px;">
+        <label>查询关键词（支持模糊匹配）</label>
+        <input type="text" name="keyword" value="{{ keyword }}"
+               placeholder="请输入账号或户名" autocomplete="off">
+      </div>
+      <div class="form-group">
+        <label>&nbsp;</label>
+        <button type="submit" class="btn btn-primary">🔍 查询</button>
+      </div>
+    </div>
+  </form>
+</div>
+
+{% if searched %}
+<div class="card">
+  <div class="card-title">查询结果</div>
+
+  {% if results %}
+  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+    <div class="result-info">共找到 <span>{{ results|length }}</span> 条账户记录</div>
+    <form method="POST" action="{{ url_for('account_download') }}">
+      <input type="hidden" name="keyword"     value="{{ keyword }}">
+      <input type="hidden" name="search_type" value="{{ search_type }}">
+      <button type="submit" class="btn btn-success">⬇ 下载 Excel</button>
+    </form>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>账号</th>
+          <th>户名</th>
+          <th>客户号</th>
+          <th>证件号码</th>
+          <th>开户日期</th>
+          <th>账户状态</th>
+          <th>余额（元）</th>
+          <th>币种</th>
+          <th>开户网点</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in results %}
+        <tr>
+          <td>{{ row.account_no }}</td>
+          <td>{{ row.account_name }}</td>
+          <td>{{ row.customer_no }}</td>
+          <td>{{ row.id_card }}</td>
+          <td>{{ row.open_date }}</td>
+          <td>
+            {% if row.status == '正常' %}
+              <span class="badge badge-normal">{{ row.status }}</span>
+            {% elif row.status == '冻结' %}
+              <span class="badge badge-frozen">{{ row.status }}</span>
+            {% else %}
+              <span class="badge badge-closed">{{ row.status }}</span>
+            {% endif %}
+          </td>
+          <td style="text-align:right;">{{ "%.2f"|format(row.balance) }}</td>
+          <td>{{ row.currency }}</td>
+          <td>{{ row.branch }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="alert alert-warning">未查询到符合条件的账户，请检查关键词后重试。</div>
+  {% endif %}
+</div>
+{% endif %}
+{% endblock %}
