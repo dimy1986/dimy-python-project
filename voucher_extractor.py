@@ -233,18 +233,102 @@ def _fix_amount_ocr_error(text: str):
         "常": "民",
         "参": "叁",
         "琴": "叁",
+        "岑": "叁",   # OCR 把第二个"叁"识别为"岑"
         "任": "仟",
         "伯": "佰",
+        "鱼": "佰",   # OCR 把"佰"识别为"鱼"
+        "渔": "佰",
         "圆": "元",
         "園": "元",
         "萬": "万",
         "市": "币",
+        "拾陆": "拾陆",  # 保留，防止意外替换
     }
 
     for k, v in fix_map.items():
         text = text.replace(k, v)
 
+    # 修复乱码前缀：当"人民币"或"RMB"被识别为乱码时，
+    # 找到第一个合法大写金额字符，将其之前的乱码前缀替换为"人民币"
+    _AMOUNT_CHARS = re.compile(r'[壹贰叁肆伍陆柒捌玖拾佰仟万亿元角分整零百千]')
+    m = _AMOUNT_CHARS.search(text)
+    if m and m.start() > 0:
+        prefix = text[:m.start()]
+        if not re.match(r'^(人民币|RMB)', prefix):
+            text = '人民币' + text[m.start():]
+
     return text
+
+
+def _chinese_amount_to_number(text: str) -> str:
+    """将中文大写金额转换为小写数字字符串（如 叁拾叁万陆仟肆佰元整 → ￥336400.00）。
+
+    作为 OCR 无法识别表格单格数字阵列时的兜底方案。
+    """
+    if not text:
+        return None
+
+    DIGIT = {
+        '零': 0, '壹': 1, '贰': 2, '叁': 3, '肆': 4,
+        '伍': 5, '陆': 6, '柒': 7, '捌': 8, '玖': 9,
+        # 兼容简写
+        '一': 1, '二': 2, '三': 3, '四': 4, '五': 5,
+        '六': 6, '七': 7, '八': 8, '九': 9,
+    }
+    UNIT = {
+        '拾': 10, '十': 10,
+        '佰': 100, '百': 100,
+        '仟': 1000, '千': 1000,
+    }
+
+    def parse_section(s: str) -> int:
+        """解析不含万/亿的段（最多4位：千百十个）"""
+        val, cur = 0, 0
+        for ch in s:
+            if ch in DIGIT:
+                cur = DIGIT[ch]
+            elif ch in UNIT:
+                if cur == 0:
+                    cur = 1  # 拾前省略"壹"
+                val += cur * UNIT[ch]
+                cur = 0
+        val += cur
+        return val
+
+    # 去除前缀（人民币/RMB 等）和后缀（整/正）
+    clean = re.sub(r'^[人民币RMB￥\s(（【\u0028\u3010]+', '', text).strip()
+    clean = re.sub(r'[整正\s]+$', '', clean).strip()
+    if not clean:
+        return None
+
+    # 提取角/分
+    jiao, fen = 0, 0
+    m = re.search(r'([零壹贰叁肆伍陆柒捌玖一二三四五六七八九])角', clean)
+    if m:
+        jiao = DIGIT.get(m.group(1), 0)
+    m = re.search(r'([零壹贰叁肆伍陆柒捌玖一二三四五六七八九])分', clean)
+    if m:
+        fen = DIGIT.get(m.group(1), 0)
+
+    # 截取元之前的整数部分
+    int_part = re.split(r'[元圆园]', clean)[0]
+
+    total = 0
+    # 处理亿段
+    if '亿' in int_part:
+        yi_s, int_part = int_part.split('亿', 1)
+        total += parse_section(yi_s) * 100000000
+    # 处理万段
+    if '万' in int_part:
+        wan_s, int_part = int_part.split('万', 1)
+        total += parse_section(wan_s) * 10000
+    total += parse_section(int_part)
+    total += jiao * 0.1 + fen * 0.01
+
+    if total <= 0:
+        return None
+
+    return f"￥{total:.2f}"
 
 
 def _is_name_candidate(s: str):
@@ -433,6 +517,13 @@ def extract_benpiao_fields(text: str, spec_fields, file_path=None):
         data["金额小写"] = "￥" + amount_num.group(1).replace(",", "")
     data["金额大写"] = amount_cn
 
+    # 兜底：OCR 无法从单格数字阵列识别小写金额时，从大写推算
+    if not data.get("金额小写") and amount_cn:
+        derived = _chinese_amount_to_number(amount_cn)
+        if derived:
+            print(f"[金额小写推算] {amount_cn} -> {derived}")
+            data["金额小写"] = derived
+
     # ===== 申请人账号 =====
     m = _extract_account_by_explicit_label(text, ["申请人账号"])
     block_acc = _extract_account_from_label_block(text, "申请人")
@@ -461,6 +552,17 @@ def extract_benpiao_fields(text: str, spec_fields, file_path=None):
             v2 = str(data["代理付款行"]).strip()
             if not any(k in v2 for k in ["银行", "支行", "分行"]):
                 data["代理付款行"] = None
+
+    # ===== 用途（当同行未提取到时，用邻域回退） =====
+    # OCR 对表格凭证常将标签行与内容行分开，导致同行正则无法捕获
+    if not data.get("用途"):
+        v = _extract_near_label_text(text, ["用途"], max_len=30)
+        if v:
+            print(f"[用途邻域提取] {v}")
+            data["用途"] = v
+    # 过滤掉误捕获的字段名
+    if data.get("用途") in {"账号", "申请人", "收款人", "金额", "代理付款行"}:
+        data["用途"] = None
 
     # ===== 申请人、收款人（用标签邻域提取） =====
     if data.get("申请人"):
