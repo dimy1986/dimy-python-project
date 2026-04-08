@@ -16,9 +16,15 @@ if errorlevel 1 (
 
 :: 安装/升级依赖
 echo [1/3] 安装依赖...
-pip install flask pandas openpyxl sshtunnel pyhive thrift_sasl sasl pyinstaller --upgrade -q
+pip install -r requirements.txt --upgrade -q
 if errorlevel 1 (
-    echo [错误] 依赖安装失败，请检查网络或 pip 配置
+    echo [错误] 运行时依赖安装失败，请检查网络或 pip 配置
+    pause
+    exit /b 1
+)
+pip install pyinstaller --upgrade -q
+if errorlevel 1 (
+    echo [错误] pyinstaller 安装失败，请检查网络或 pip 配置
     pause
     exit /b 1
 )
