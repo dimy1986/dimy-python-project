@@ -1,0 +1,30 @@
+{
+    "title": "交易信息查询",
+    "icon": "📋",
+    "description": "按时间范围 + 客户号 / 账号 / 户名 查询交易流水，结果可下载",
+    "sheet_name": "交易查询结果",
+    "empty_message": "未查询到符合条件的交易记录，请调整查询条件后重试。",
+    "result_count_label": "交易记录",
+    "keyword_placeholder": "请输入客户号、账号或户名",
+    "keyword_required": true,
+    "date_range": true,
+    "search_fields": [
+        {"value": "account_no",   "label": "按账号"},
+        {"value": "customer_no",  "label": "按客户号"},
+        {"value": "account_name", "label": "按户名"}
+    ],
+    "columns": [
+        {"key": "trans_date",    "label": "交易日期"},
+        {"key": "trans_time",    "label": "交易时间"},
+        {"key": "account_no",    "label": "账号"},
+        {"key": "account_name",  "label": "户名"},
+        {"key": "customer_no",   "label": "客户号"},
+        {"key": "trans_type",    "label": "交易类型"},
+        {"key": "amount",        "label": "金额（元）",  "format": "money"},
+        {"key": "direction",     "label": "借贷",        "format": "badge",
+         "badge_map": {"借": "badge-debit", "_default": "badge-credit"}},
+        {"key": "balance_after", "label": "交易后余额", "format": "money"},
+        {"key": "channel",       "label": "渠道"},
+        {"key": "remark",        "label": "摘要"}
+    ]
+}

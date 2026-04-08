@@ -7,10 +7,14 @@
 
 数据库连接参数由 config.ini 提供，不在代码中硬编码。
 SQL 查询语句由 queries/*.sql 文件提供，不在代码中写死。
+每个查询页面的元信息由对应的 queries/*.json 文件描述。
+新增查询只需在 queries/ 目录下放入 <name>.sql 和 <name>.json，
+无需修改本文件。
 """
 
 import atexit
 import io
+import json
 import os
 import sys
 import threading
@@ -25,7 +29,7 @@ from flask import (
     send_file,
 )
 
-from database import get_db, load_query, query_db, start_tunnel, stop_tunnel
+from database import get_db, get_queries_dir, load_query, query_db, start_tunnel, stop_tunnel
 
 
 def _get_template_folder() -> str:
@@ -42,11 +46,34 @@ def _get_template_folder() -> str:
 
 app = Flask(__name__, template_folder=_get_template_folder())
 
-# 账户查询允许作为筛选字段的列名白名单
-_ACCOUNT_FIELD_ALLOWLIST = {"account_no", "account_name"}
 
-# 交易查询允许作为筛选字段的列名白名单
-_TRANS_FIELD_ALLOWLIST = {"customer_no", "account_no", "account_name"}
+# ──────────────────────────── 查询配置加载 ────────────────────────────
+
+def _load_all_query_configs() -> dict:
+    """
+    扫描 queries/ 目录，按文件名顺序加载所有 *.json 配置文件。
+    文件名（不含扩展名）同时作为查询 ID 和路由端点名称。
+    """
+    configs: dict = {}
+    d = get_queries_dir()
+    if not os.path.isdir(d):
+        return configs
+    for fname in sorted(os.listdir(d)):
+        if fname.endswith(".json"):
+            qid = fname[:-5]
+            with open(os.path.join(d, fname), encoding="utf-8") as f:
+                configs[qid] = json.load(f)
+    return configs
+
+
+_query_configs = _load_all_query_configs()
+
+
+@app.context_processor
+def _inject_query_configs():
+    """将所有查询配置注入到每个模板的上下文，供导航栏、首页等公共模板使用。"""
+    return {"query_configs": _query_configs}
+
 
 # ──────────────────────────── 数据库连接管理 ────────────────────────────
 
@@ -70,139 +97,121 @@ def index():
     return render_template("index.html")
 
 
-# ──────────────────────────── 账户信息查询 ────────────────────────────
+# ──────────────────────────── 动态路由注册 ────────────────────────────
 
-@app.route("/account", methods=["GET", "POST"])
-def account_query():
-    results = []
-    keyword = ""
-    search_type = "account_no"
-    searched = False
-    error = ""
+def _build_params(cfg: dict, keyword: str, date_from: str, date_to: str) -> tuple:
+    """根据查询配置组装 SQL 参数元组。"""
+    if cfg.get("date_range"):
+        return (date_from, date_to, f"%{keyword}%")
+    return (f"%{keyword}%",)
 
-    if request.method == "POST":
+
+def _make_query_view(query_id: str, cfg: dict):
+    """为指定查询 ID 生成 GET / POST 路由处理函数。"""
+    allowlist = {sf["value"] for sf in cfg["search_fields"]}
+    default_field = cfg["search_fields"][0]["value"]
+
+    def view():
+        results = []
+        keyword = ""
+        search_type = default_field
+        date_from = ""
+        date_to = ""
+        searched = False
+        error = ""
+
+        if request.method == "POST":
+            keyword = request.form.get("keyword", "").strip()
+            search_type = request.form.get("search_type", default_field)
+            searched = True
+
+            if cfg.get("date_range"):
+                date_from = request.form.get("date_from", "").strip()
+                date_to = request.form.get("date_to", "").strip()
+                if not date_from or not date_to:
+                    error = "请填写查询起止日期。"
+                elif date_from > date_to:
+                    error = "开始日期不能晚于结束日期。"
+                elif not keyword:
+                    error = "请输入关键词。"
+
+            if not error and keyword:
+                field = search_type if search_type in allowlist else default_field
+                try:
+                    sql = load_query(query_id).format(field=field)
+                    results = query_db(
+                        get_connection(), sql,
+                        _build_params(cfg, keyword, date_from, date_to),
+                    )
+                except Exception as exc:
+                    error = f"查询失败：{exc}"
+
+        return render_template(
+            "query.html",
+            cfg=cfg,
+            query_id=query_id,
+            results=results,
+            keyword=keyword,
+            search_type=search_type,
+            date_from=date_from,
+            date_to=date_to,
+            searched=searched,
+            error=error,
+        )
+
+    view.__name__ = query_id
+    return view
+
+
+def _make_download_view(query_id: str, cfg: dict):
+    """为指定查询 ID 生成 Excel 下载路由处理函数。"""
+    allowlist = {sf["value"] for sf in cfg["search_fields"]}
+    default_field = cfg["search_fields"][0]["value"]
+
+    def download():
         keyword = request.form.get("keyword", "").strip()
-        search_type = request.form.get("search_type", "account_no")
-        searched = True
-
-        if keyword:
-            field = search_type if search_type in _ACCOUNT_FIELD_ALLOWLIST else "account_no"
-            try:
-                sql_template = load_query("account_query")
-                sql = sql_template.format(field=field)
-                db = get_connection()
-                results = query_db(db, sql, (f"%{keyword}%",))
-            except Exception as exc:
-                error = f"查询失败：{exc}"
-
-    return render_template(
-        "account_query.html",
-        results=results,
-        keyword=keyword,
-        search_type=search_type,
-        searched=searched,
-        error=error,
-    )
-
-
-@app.route("/account/download", methods=["POST"])
-def account_download():
-    keyword = request.form.get("keyword", "").strip()
-    search_type = request.form.get("search_type", "account_no")
-
-    field = search_type if search_type in _ACCOUNT_FIELD_ALLOWLIST else "account_no"
-    sql_template = load_query("account_query")
-    sql = sql_template.format(field=field)
-    db = get_connection()
-    rows = query_db(db, sql, (f"%{keyword}%",))
-
-    df = pd.DataFrame(rows)
-
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        df.to_excel(writer, index=False, sheet_name="账户查询结果")
-    output.seek(0)
-
-    return send_file(
-        output,
-        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        as_attachment=True,
-        download_name="账户查询结果.xlsx",
-    )
-
-
-# ──────────────────────────── 交易信息查询 ────────────────────────────
-
-@app.route("/transaction", methods=["GET", "POST"])
-def transaction_query():
-    results = []
-    date_from = ""
-    date_to = ""
-    keyword = ""
-    search_type = "account_no"
-    searched = False
-    error = ""
-
-    if request.method == "POST":
+        search_type = request.form.get("search_type", default_field)
         date_from = request.form.get("date_from", "").strip()
         date_to = request.form.get("date_to", "").strip()
-        keyword = request.form.get("keyword", "").strip()
-        search_type = request.form.get("search_type", "account_no")
-        searched = True
 
-        if not date_from or not date_to:
-            error = "请填写查询起止日期。"
-        elif date_from > date_to:
-            error = "开始日期不能晚于结束日期。"
-        elif not keyword:
-            error = "请输入客户号、账号或户名中的至少一项。"
-        else:
-            field = search_type if search_type in _TRANS_FIELD_ALLOWLIST else "account_no"
-            try:
-                sql_template = load_query("transaction_query")
-                sql = sql_template.format(field=field)
-                db = get_connection()
-                results = query_db(db, sql, (date_from, date_to, f"%{keyword}%"))
-            except Exception as exc:
-                error = f"查询失败：{exc}"
+        field = search_type if search_type in allowlist else default_field
+        sql = load_query(query_id).format(field=field)
+        rows = query_db(
+            get_connection(), sql,
+            _build_params(cfg, keyword, date_from, date_to),
+        )
 
-    return render_template(
-        "transaction_query.html",
-        results=results,
-        date_from=date_from,
-        date_to=date_to,
-        keyword=keyword,
-        search_type=search_type,
-        searched=searched,
-        error=error,
+        df = pd.DataFrame(rows)
+        sheet = cfg.get("sheet_name", "查询结果")
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine="openpyxl") as writer:
+            df.to_excel(writer, index=False, sheet_name=sheet)
+        output.seek(0)
+
+        return send_file(
+            output,
+            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            as_attachment=True,
+            download_name=f"{sheet}.xlsx",
+        )
+
+    download.__name__ = f"{query_id}_download"
+    return download
+
+
+# 遍历所有已加载的查询配置，自动注册查询路由和下载路由
+for _qid, _cfg in _query_configs.items():
+    app.add_url_rule(
+        f"/{_qid}",
+        endpoint=_qid,
+        view_func=_make_query_view(_qid, _cfg),
+        methods=["GET", "POST"],
     )
-
-
-@app.route("/transaction/download", methods=["POST"])
-def transaction_download():
-    date_from = request.form.get("date_from", "").strip()
-    date_to = request.form.get("date_to", "").strip()
-    keyword = request.form.get("keyword", "").strip()
-    search_type = request.form.get("search_type", "account_no")
-
-    field = search_type if search_type in _TRANS_FIELD_ALLOWLIST else "account_no"
-    sql_template = load_query("transaction_query")
-    sql = sql_template.format(field=field)
-    db = get_connection()
-    rows = query_db(db, sql, (date_from, date_to, f"%{keyword}%"))
-
-    df = pd.DataFrame(rows)
-
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        df.to_excel(writer, index=False, sheet_name="交易查询结果")
-    output.seek(0)
-
-    return send_file(
-        output,
-        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        as_attachment=True,
-        download_name="交易查询结果.xlsx",
+    app.add_url_rule(
+        f"/{_qid}/download",
+        endpoint=f"{_qid}_download",
+        view_func=_make_download_view(_qid, _cfg),
+        methods=["POST"],
     )
 
 

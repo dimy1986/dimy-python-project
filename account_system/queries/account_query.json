@@ -1,0 +1,27 @@
+{
+    "title": "账户信息查询",
+    "icon": "👤",
+    "description": "按账号或户名检索账户基本信息，支持模糊匹配，结果可下载",
+    "sheet_name": "账户查询结果",
+    "empty_message": "未查询到符合条件的账户，请检查关键词后重试。",
+    "result_count_label": "账户记录",
+    "keyword_placeholder": "请输入账号或户名",
+    "keyword_required": false,
+    "date_range": false,
+    "search_fields": [
+        {"value": "account_no",   "label": "按账号"},
+        {"value": "account_name", "label": "按户名"}
+    ],
+    "columns": [
+        {"key": "account_no",   "label": "账号"},
+        {"key": "account_name", "label": "户名"},
+        {"key": "customer_no",  "label": "客户号"},
+        {"key": "id_card",      "label": "证件号码"},
+        {"key": "open_date",    "label": "开户日期"},
+        {"key": "status",       "label": "账户状态",  "format": "badge",
+         "badge_map": {"正常": "badge-normal", "冻结": "badge-frozen", "_default": "badge-closed"}},
+        {"key": "balance",      "label": "余额（元）", "format": "money"},
+        {"key": "currency",     "label": "币种"},
+        {"key": "branch",       "label": "开户网点"}
+    ]
+}

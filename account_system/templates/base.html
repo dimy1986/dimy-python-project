@@ -152,10 +152,10 @@
   <nav>
     <a href="{{ url_for('index') }}"
        {% if request.endpoint == 'index' %}class="active"{% endif %}>首页</a>
-    <a href="{{ url_for('account_query') }}"
-       {% if request.endpoint == 'account_query' %}class="active"{% endif %}>账户信息查询</a>
-    <a href="{{ url_for('transaction_query') }}"
-       {% if request.endpoint == 'transaction_query' %}class="active"{% endif %}>交易信息查询</a>
+    {% for qid, qcfg in query_configs.items() %}
+    <a href="{{ url_for(qid) }}"
+       {% if request.endpoint == qid %}class="active"{% endif %}>{{ qcfg.title }}</a>
+    {% endfor %}
   </nav>
 </header>
 

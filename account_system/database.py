@@ -33,6 +33,11 @@ def _get_config_path() -> str:
     return os.path.join(_base_dir(), "config.ini")
 
 
+def get_queries_dir() -> str:
+    """返回 SQL / JSON 查询文件所在目录（供外部模块调用）。"""
+    return _get_queries_dir()
+
+
 def _get_queries_dir() -> str:
     """
     返回 SQL 查询文件目录：

@@ -1,0 +1,101 @@
+{% extends "base.html" %}
+{% block title %}{{ cfg.title }}{% endblock %}
+
+{% block content %}
+<div class="card">
+  <div class="card-title">{{ cfg.title }}</div>
+  <form method="POST" action="{{ url_for(query_id) }}">
+    {% if cfg.date_range %}
+    <div class="form-row" style="margin-bottom:14px;">
+      <div class="form-group">
+        <label>开始日期</label>
+        <input type="date" name="date_from" value="{{ date_from }}" required>
+      </div>
+      <div class="form-group">
+        <label>结束日期</label>
+        <input type="date" name="date_to" value="{{ date_to }}" required>
+      </div>
+    </div>
+    {% endif %}
+    <div class="form-row">
+      <div class="form-group">
+        <label>查询类型</label>
+        <select name="search_type">
+          {% for sf in cfg.search_fields %}
+          <option value="{{ sf.value }}" {% if search_type == sf.value %}selected{% endif %}>{{ sf.label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="form-group" style="flex:1; min-width:220px;">
+        <label>查询关键词（支持模糊匹配）</label>
+        <input type="text" name="keyword" value="{{ keyword }}"
+               placeholder="{{ cfg.keyword_placeholder }}" autocomplete="off">
+      </div>
+      <div class="form-group">
+        <label>&nbsp;</label>
+        <button type="submit" class="btn btn-primary">🔍 查询</button>
+      </div>
+    </div>
+  </form>
+</div>
+
+{% if searched %}
+<div class="card">
+  <div class="card-title">查询结果</div>
+
+  {% if error %}
+  <div class="alert alert-danger">{{ error }}</div>
+  {% elif results %}
+  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+    <div class="result-info">
+      共找到 <span>{{ results|length }}</span> 条{{ cfg.result_count_label }}
+      {% if cfg.date_range %}（{{ date_from }} 至 {{ date_to }}）{% endif %}
+    </div>
+    <form method="POST" action="{{ url_for(query_id + '_download') }}">
+      {% if cfg.date_range %}
+      <input type="hidden" name="date_from" value="{{ date_from }}">
+      <input type="hidden" name="date_to"   value="{{ date_to }}">
+      {% endif %}
+      <input type="hidden" name="keyword"     value="{{ keyword }}">
+      <input type="hidden" name="search_type" value="{{ search_type }}">
+      <button type="submit" class="btn btn-success">⬇ 下载 Excel</button>
+    </form>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          {% for col in cfg.columns %}
+          <th>{{ col.label }}</th>
+          {% endfor %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in results %}
+        <tr>
+          {% for col in cfg.columns %}
+          {%- set fmt = col.get('format') or '' -%}
+          <td{% if fmt == 'money' %} style="text-align:right;"{% endif %}>
+            {%- set val = row[col.key] -%}
+            {%- if fmt == 'money' -%}
+              {{ "%.2f"|format(val) }}
+            {%- elif fmt == 'badge' -%}
+              {%- set bmap = col.get('badge_map') or {} -%}
+              {%- set css = bmap.get(val) or bmap.get('_default') or '' -%}
+              <span class="badge {{ css }}">{{ val }}</span>
+            {%- else -%}
+              {{ val }}
+            {%- endif -%}
+          </td>
+          {% endfor %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="alert alert-warning">{{ cfg.empty_message }}</div>
+  {% endif %}
+</div>
+{% endif %}
+{% endblock %}
