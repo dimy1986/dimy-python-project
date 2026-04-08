@@ -4,6 +4,8 @@ openpyxl>=3.1.0
 
 # Inceptor 连接依赖
 sshtunnel>=0.4.0
+# paramiko 3.x 移除了 DSSKey，sshtunnel 内部仍依赖该类，必须固定到 2.x
+paramiko>=2.9.0,<3.0
 pyhive>=0.7.0
 thrift_sasl>=0.4.3
 sasl>=0.3.1
