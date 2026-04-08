@@ -15,14 +15,27 @@ if ! command -v python3 &>/dev/null; then
     exit 1
 fi
 
-echo "[1/3] 安装依赖..."
-pip3 install -r requirements.txt --upgrade -q
-pip3 install pyinstaller --upgrade -q
+# 创建或复用虚拟环境
+echo "[1/4] 准备虚拟环境..."
+if [ ! -d ".venv" ]; then
+    python3 -m venv .venv
+    echo "      虚拟环境已创建：.venv/"
+else
+    echo "      复用已有虚拟环境：.venv/"
+fi
 
-echo "[2/3] 清理旧构建..."
+# 激活虚拟环境
+# shellcheck disable=SC1091
+source .venv/bin/activate
+
+echo "[2/4] 安装依赖..."
+pip install -r requirements.txt --upgrade -q
+pip install pyinstaller --upgrade -q
+
+echo "[3/4] 清理旧构建..."
 rm -rf dist/query_system build/query_system
 
-echo "[3/3] 打包中，请耐心等待（约 1-3 分钟）..."
+echo "[4/4] 打包中，请耐心等待（约 1-3 分钟）..."
 pyinstaller query_system.spec --noconfirm
 
 echo

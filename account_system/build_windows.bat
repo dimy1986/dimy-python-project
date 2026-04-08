@@ -14,8 +14,30 @@ if errorlevel 1 (
     exit /b 1
 )
 
-:: 安装/升级依赖
-echo [1/3] 安装依赖...
+:: 创建或复用虚拟环境
+echo [1/4] 准备虚拟环境...
+if not exist .venv (
+    python -m venv .venv
+    if errorlevel 1 (
+        echo [错误] 虚拟环境创建失败
+        pause
+        exit /b 1
+    )
+    echo       虚拟环境已创建：.venv\
+) else (
+    echo       复用已有虚拟环境：.venv\
+)
+
+:: 激活虚拟环境
+call .venv\Scripts\activate.bat
+if errorlevel 1 (
+    echo [错误] 虚拟环境激活失败
+    pause
+    exit /b 1
+)
+
+:: 在 venv 内安装/升级依赖
+echo [2/4] 安装依赖...
 pip install -r requirements.txt --upgrade -q
 if errorlevel 1 (
     echo [错误] 运行时依赖安装失败，请检查网络或 pip 配置
@@ -30,12 +52,12 @@ if errorlevel 1 (
 )
 
 :: 清理旧的构建产物
-echo [2/3] 清理旧构建...
+echo [3/4] 清理旧构建...
 if exist dist\query_system rmdir /s /q dist\query_system
 if exist build\query_system rmdir /s /q build\query_system
 
 :: 执行打包
-echo [3/3] 打包中，请耐心等待（约 1-3 分钟）...
+echo [4/4] 打包中，请耐心等待（约 1-3 分钟）...
 pyinstaller query_system.spec --noconfirm
 if errorlevel 1 (
     echo [错误] 打包失败，请查看上方错误信息
