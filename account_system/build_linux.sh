@@ -3,6 +3,7 @@
 # 打包完成后将 dist/query_system/ 整个目录拷贝到目标机器运行
 
 set -e
+cd "$(dirname "$0")"
 echo "============================================================"
 echo "  账户与交易查询系统 - Linux/macOS 打包脚本"
 echo "  打包完成后将 dist/query_system/ 拷贝到目标机器"

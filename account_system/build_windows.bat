@@ -1,5 +1,6 @@
 @echo off
 chcp 65001 >nul
+cd /d "%~dp0"
 echo ============================================================
 echo   账户与交易查询系统 - Windows 打包脚本
 echo   打包完成后，将 dist\query_system\ 整个文件夹拷贝给目标电脑
