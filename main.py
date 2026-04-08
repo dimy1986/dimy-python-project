@@ -136,6 +136,32 @@ EXTERNAL_OCR_BASE = get_ocr_base()
 ocr = None
 
 
+def _get_short_path(path: str) -> str:
+    """将含非 ASCII 字符的路径转换为 Windows 8.3 短路径。
+
+    PaddlePaddle 的 C++ 推理引擎使用 ANSI 文件 API，在非中文 locale 的 Windows
+    上无法打开含中文字符的路径（analysis_predictor.cc fin.is_open() == false）。
+    转为全 ASCII 的 8.3 短路径可绕过该限制。非 Windows 平台直接返回原路径。
+    """
+    if sys.platform != 'win32':
+        return path
+    if all(ord(c) < 128 for c in path):
+        return path  # 纯 ASCII，无需转换
+    try:
+        import ctypes
+        buf_size = ctypes.windll.kernel32.GetShortPathNameW(path, None, 0)
+        if buf_size > 0:
+            buf = ctypes.create_unicode_buffer(buf_size)
+            ctypes.windll.kernel32.GetShortPathNameW(path, buf, buf_size)
+            short = buf.value
+            if short:
+                logging.info(f"短路径转换: {path} -> {short}")
+                return short
+    except Exception as e:
+        logging.warning(f"短路径转换失败（{e}），使用原路径: {path}")
+    return path
+
+
 def _init_ocr():
     """初始化OCR，使用外部模型"""
     global ocr
@@ -173,6 +199,12 @@ def _init_ocr():
         logging.info(f"  {name}: {path} -> {'✓' if exists else '✗'}")
         if not exists:
             raise FileNotFoundError(f"模型目录不存在: {path}")
+
+    # 将路径转为 8.3 短路径，避免 PaddlePaddle C++ 层在非中文 locale Windows
+    # 上因 ANSI API 无法处理中文字符而报 "Cannot open file" 错误
+    det_model = _get_short_path(det_model)
+    rec_model = _get_short_path(rec_model)
+    cls_model = _get_short_path(cls_model)
 
     # 第三步：初始化OCR
     try:
