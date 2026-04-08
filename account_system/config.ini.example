@@ -1,0 +1,27 @@
+# ============================================================
+# 账户与交易查询系统 — 连接配置文件
+# 使用说明：
+#   1. 将本文件复制为 config.ini（与 exe 或 app.py 同级目录）
+#   2. 将各项 * / ***** 替换为实际值
+#   3. config.ini 含有敏感信息，请勿提交到版本库
+# ============================================================
+
+[ssh]
+# SSH 跳板机地址与端口
+host     = YOUR_SSH_JUMP_HOST
+port     = 22
+# SSH 登录账号与密码
+username = YOUR_SSH_USERNAME
+password = *****
+
+[inceptor]
+# Inceptor 服务在内网中的真实地址与端口（Hive JDBC 端口，通常为 10000 或 10002）
+host     = YOUR_INCEPTOR_HOST
+port     = 10002
+# 本地绑定端口（SSH 隧道将把远端端口映射到此本地端口，不与其他服务冲突即可）
+local_port = 9999
+# Inceptor LDAP 登录账号与密码
+username = YOUR_INCEPTOR_USERNAME
+password = *****
+# 默认连接的数据库名
+database = YOUR_DATABASE_NAME

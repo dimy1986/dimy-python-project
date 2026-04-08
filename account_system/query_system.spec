@@ -12,9 +12,10 @@ a = Analysis(
     ["app.py"],
     pathex=[str(Path("app.py").parent.resolve())],
     binaries=[],
-    # Bundle the templates directory into the package
+    # Bundle the templates and SQL query files into the package
     datas=[
         ("templates", "templates"),
+        ("queries",   "queries"),
     ],
     hiddenimports=[
         # Flask internals sometimes missed by the auto-analyzer
@@ -30,9 +31,17 @@ a = Analysis(
         "pandas",
         "openpyxl",
         "openpyxl.cell._writer",
-        # SQLite (usually built-in, listed for safety)
-        "sqlite3",
-        "_sqlite3",
+        # Inceptor / Hive connection via SSH tunnel
+        "sshtunnel",
+        "pyhive",
+        "pyhive.hive",
+        "thrift",
+        "thrift.transport",
+        "thrift.transport.TSocket",
+        "thrift.transport.TTransport",
+        "thrift.protocol",
+        "thrift_sasl",
+        "sasl",
         # database module
         "database",
     ],

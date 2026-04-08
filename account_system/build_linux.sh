@@ -16,7 +16,7 @@ if ! command -v python3 &>/dev/null; then
 fi
 
 echo "[1/3] 安装依赖..."
-pip3 install flask pandas openpyxl pyinstaller --upgrade -q
+pip3 install flask pandas openpyxl sshtunnel pyhive thrift_sasl sasl pyinstaller --upgrade -q
 
 echo "[2/3] 清理旧构建..."
 rm -rf dist/query_system build/query_system

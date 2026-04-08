@@ -5,11 +5,11 @@
 运行: python app.py
 访问: http://localhost:5000 (内网可通过 http://<本机IP>:5000 访问)
 
-生产环境建议使用 Gunicorn 等 WSGI 服务器启动:
-    pip install gunicorn
-    gunicorn -w 4 -b 0.0.0.0:5000 app:app
+数据库连接参数由 config.ini 提供，不在代码中硬编码。
+SQL 查询语句由 queries/*.sql 文件提供，不在代码中写死。
 """
 
+import atexit
 import io
 import os
 import sys
@@ -23,10 +23,9 @@ from flask import (
     render_template,
     request,
     send_file,
-    url_for,
 )
 
-from database import DB_PATH, get_db, init_db
+from database import get_db, load_query, query_db, start_tunnel, stop_tunnel
 
 
 def _get_template_folder() -> str:
@@ -43,8 +42,10 @@ def _get_template_folder() -> str:
 
 app = Flask(__name__, template_folder=_get_template_folder())
 
-# Allowlist of column names that may be used in dynamic SQL fragments.
-# These must exactly match column names in the transactions table.
+# 账户查询允许作为筛选字段的列名白名单
+_ACCOUNT_FIELD_ALLOWLIST = {"account_no", "account_name"}
+
+# 交易查询允许作为筛选字段的列名白名单
 _TRANS_FIELD_ALLOWLIST = {"customer_no", "account_no", "account_name"}
 
 # ──────────────────────────── 数据库连接管理 ────────────────────────────
@@ -77,6 +78,7 @@ def account_query():
     keyword = ""
     search_type = "account_no"
     searched = False
+    error = ""
 
     if request.method == "POST":
         keyword = request.form.get("keyword", "").strip()
@@ -84,18 +86,14 @@ def account_query():
         searched = True
 
         if keyword:
-            db = get_connection()
-            if search_type == "account_no":
-                rows = db.execute(
-                    "SELECT * FROM accounts WHERE account_no LIKE ?",
-                    (f"%{keyword}%",),
-                ).fetchall()
-            else:
-                rows = db.execute(
-                    "SELECT * FROM accounts WHERE account_name LIKE ?",
-                    (f"%{keyword}%",),
-                ).fetchall()
-            results = [dict(r) for r in rows]
+            field = search_type if search_type in _ACCOUNT_FIELD_ALLOWLIST else "account_no"
+            try:
+                sql_template = load_query("account_query")
+                sql = sql_template.format(field=field)
+                db = get_connection()
+                results = query_db(db, sql, (f"%{keyword}%",))
+            except Exception as exc:
+                error = f"查询失败：{exc}"
 
     return render_template(
         "account_query.html",
@@ -103,6 +101,7 @@ def account_query():
         keyword=keyword,
         search_type=search_type,
         searched=searched,
+        error=error,
     )
 
 
@@ -111,25 +110,13 @@ def account_download():
     keyword = request.form.get("keyword", "").strip()
     search_type = request.form.get("search_type", "account_no")
 
+    field = search_type if search_type in _ACCOUNT_FIELD_ALLOWLIST else "account_no"
+    sql_template = load_query("account_query")
+    sql = sql_template.format(field=field)
     db = get_connection()
-    if search_type == "account_no":
-        rows = db.execute(
-            "SELECT * FROM accounts WHERE account_no LIKE ?",
-            (f"%{keyword}%",),
-        ).fetchall()
-    else:
-        rows = db.execute(
-            "SELECT * FROM accounts WHERE account_name LIKE ?",
-            (f"%{keyword}%",),
-        ).fetchall()
+    rows = query_db(db, sql, (f"%{keyword}%",))
 
-    columns = ["id", "account_no", "account_name", "customer_no", "id_card",
-               "open_date", "status", "balance", "currency", "branch"]
-    column_names = ["序号", "账号", "户名", "客户号", "证件号码",
-                    "开户日期", "账户状态", "余额", "币种", "开户网点"]
-
-    df = pd.DataFrame([dict(r) for r in rows], columns=columns)
-    df.columns = column_names
+    df = pd.DataFrame(rows)
 
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
@@ -170,24 +157,14 @@ def transaction_query():
         elif not keyword:
             error = "请输入客户号、账号或户名中的至少一项。"
         else:
-            db = get_connection()
-            field_map = {
-                "customer_no": "customer_no",
-                "account_no": "account_no",
-                "account_name": "account_name",
-            }
-            field = field_map.get(search_type, "account_no")
-            # Explicit allowlist check before string interpolation into SQL
-            if field not in _TRANS_FIELD_ALLOWLIST:
-                field = "account_no"
-            sql = (
-                f"SELECT * FROM transactions "
-                f"WHERE trans_date BETWEEN ? AND ? "
-                f"AND {field} LIKE ? "
-                f"ORDER BY trans_date DESC, trans_time DESC"
-            )
-            rows = db.execute(sql, (date_from, date_to, f"%{keyword}%")).fetchall()
-            results = [dict(r) for r in rows]
+            field = search_type if search_type in _TRANS_FIELD_ALLOWLIST else "account_no"
+            try:
+                sql_template = load_query("transaction_query")
+                sql = sql_template.format(field=field)
+                db = get_connection()
+                results = query_db(db, sql, (date_from, date_to, f"%{keyword}%"))
+            except Exception as exc:
+                error = f"查询失败：{exc}"
 
     return render_template(
         "transaction_query.html",
@@ -208,34 +185,13 @@ def transaction_download():
     keyword = request.form.get("keyword", "").strip()
     search_type = request.form.get("search_type", "account_no")
 
-    field_map = {
-        "customer_no": "customer_no",
-        "account_no": "account_no",
-        "account_name": "account_name",
-    }
-    field = field_map.get(search_type, "account_no")
-    # Explicit allowlist check before string interpolation into SQL
-    if field not in _TRANS_FIELD_ALLOWLIST:
-        field = "account_no"
-
+    field = search_type if search_type in _TRANS_FIELD_ALLOWLIST else "account_no"
+    sql_template = load_query("transaction_query")
+    sql = sql_template.format(field=field)
     db = get_connection()
-    sql = (
-        f"SELECT * FROM transactions "
-        f"WHERE trans_date BETWEEN ? AND ? "
-        f"AND {field} LIKE ? "
-        f"ORDER BY trans_date DESC, trans_time DESC"
-    )
-    rows = db.execute(sql, (date_from, date_to, f"%{keyword}%")).fetchall()
+    rows = query_db(db, sql, (date_from, date_to, f"%{keyword}%"))
 
-    columns = ["id", "trans_date", "trans_time", "account_no", "account_name",
-               "customer_no", "trans_type", "amount", "direction",
-               "balance_after", "channel", "remark"]
-    column_names = ["序号", "交易日期", "交易时间", "账号", "户名",
-                    "客户号", "交易类型", "金额", "借贷方向",
-                    "交易后余额", "交易渠道", "摘要"]
-
-    df = pd.DataFrame([dict(r) for r in rows], columns=columns)
-    df.columns = column_names
+    df = pd.DataFrame(rows)
 
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
@@ -253,7 +209,16 @@ def transaction_download():
 # ──────────────────────────── 入口 ────────────────────────────
 
 if __name__ == "__main__":
-    init_db()
+    # 启动 SSH 隧道（失败时给出清晰提示后退出）
+    try:
+        local_port = start_tunnel()
+        print(f"SSH 隧道已建立，本地端口: {local_port}")
+    except Exception as exc:
+        print(f"[错误] SSH 隧道启动失败: {exc}")
+        sys.exit(1)
+
+    # 注册退出时关闭隧道
+    atexit.register(stop_tunnel)
 
     port = 5000
     url = f"http://localhost:{port}"

@@ -30,7 +30,9 @@
 <div class="card">
   <div class="card-title">查询结果</div>
 
-  {% if results %}
+  {% if error %}
+  <div class="alert alert-danger">{{ error }}</div>
+  {% elif results %}
   <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
     <div class="result-info">共找到 <span>{{ results|length }}</span> 条账户记录</div>
     <form method="POST" action="{{ url_for('account_download') }}">

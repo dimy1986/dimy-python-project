@@ -1,137 +1,185 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-数据库初始化与示例数据
-使用 SQLite，可根据需要替换为 MySQL / PostgreSQL
+数据库连接模块 — 通过 SSH 隧道连接 Inceptor (Hive/LDAP)
+
+连接参数从外部 config.ini 读取，代码中不硬编码任何地址或密码。
+SQL 查询语句从外部 queries/*.sql 文件加载，不在代码中写死。
 """
 
-import sqlite3
+import configparser
 import os
 import sys
-from datetime import date, timedelta
-import random
+from typing import Any, Dict, List, Optional, Tuple
+
+from pyhive import hive
+from sshtunnel import SSHTunnelForwarder
 
 
-def _get_db_path() -> str:
+# ──────────────────────────── 路径解析 ────────────────────────────
+
+def _base_dir() -> str:
     """
-    返回数据库文件路径。
-    - 打包为 exe 后：数据库放在 exe 所在目录（可持久保存，升级 exe 不丢失数据）。
-    - 普通 Python 运行：数据库放在本文件所在目录。
+    返回运行时基准目录：
+    - 打包为 exe 后：exe 所在目录
+    - 普通 Python 运行：本文件所在目录
     """
     if getattr(sys, "frozen", False):
-        # sys.executable 指向 .exe 文件本身
-        return os.path.join(os.path.dirname(sys.executable), "bank_data.db")
-    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "bank_data.db")
+        return os.path.dirname(sys.executable)
+    return os.path.dirname(os.path.abspath(__file__))
 
 
-DB_PATH = _get_db_path()
+def _get_config_path() -> str:
+    return os.path.join(_base_dir(), "config.ini")
 
 
-def get_db():
-    """返回数据库连接（row_factory 支持字典访问）"""
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
+def _get_queries_dir() -> str:
+    """
+    返回 SQL 查询文件目录：
+    - 优先使用运行目录下的 queries/（用户可自定义）
+    - 打包模式下若运行目录没有，则回退到 _MEIPASS 中的打包副本
+    """
+    candidate = os.path.join(_base_dir(), "queries")
+    if os.path.isdir(candidate):
+        return candidate
+    if getattr(sys, "frozen", False):
+        meipass = getattr(sys, "_MEIPASS", None)
+        if meipass:
+            fallback = os.path.join(meipass, "queries")
+            if os.path.isdir(fallback):
+                return fallback
+    return candidate
+
+
+# ──────────────────────────── 配置加载 ────────────────────────────
+
+def _load_config() -> configparser.ConfigParser:
+    """加载 config.ini，若文件不存在则抛出清晰的错误提示。"""
+    cfg = configparser.ConfigParser()
+    path = _get_config_path()
+    if not os.path.exists(path):
+        raise FileNotFoundError(
+            f"配置文件未找到: {path}\n"
+            f"请将 config.ini.example 复制为 config.ini，并填写实际连接参数。"
+        )
+    cfg.read(path, encoding="utf-8")
+    return cfg
+
+
+# ──────────────────────────── SQL 文件加载 ────────────────────────────
+
+def load_query(name: str) -> str:
+    """
+    从 queries/<name>.sql 文件中读取 SQL 模板字符串。
+
+    SQL 文件中可使用：
+      {field}  — 列名占位符，由调用方用白名单校验后的值替换
+      %s       — pyhive 参数占位符，对应 cursor.execute() 的 parameters 元组
+
+    :param name: SQL 文件名（不含 .sql 后缀），如 "account_query"
+    :raises FileNotFoundError: 若 SQL 文件不存在
+    """
+    path = os.path.join(_get_queries_dir(), f"{name}.sql")
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"SQL 查询文件未找到: {path}")
+    with open(path, encoding="utf-8") as f:
+        return f.read()
+
+
+# ──────────────────────────── SSH 隧道（单例）────────────────────────────
+
+_tunnel: Optional[SSHTunnelForwarder] = None
+_tunnel_local_port: int = 0
+
+
+def start_tunnel() -> int:
+    """
+    启动 SSH 隧道并返回本地绑定端口。若隧道已激活则直接返回端口号。
+    隧道参数从 config.ini 读取。
+    """
+    global _tunnel, _tunnel_local_port
+
+    if _tunnel is not None and _tunnel.is_active:
+        return _tunnel_local_port
+
+    cfg = _load_config()
+    ssh_host = cfg.get("ssh", "host")
+    ssh_port = cfg.getint("ssh", "port", fallback=22)
+    ssh_user = cfg.get("ssh", "username")
+    ssh_pass = cfg.get("ssh", "password")
+    inc_host = cfg.get("inceptor", "host")
+    inc_port = cfg.getint("inceptor", "port")
+    local_port = cfg.getint("inceptor", "local_port", fallback=9999)
+
+    _tunnel = SSHTunnelForwarder(
+        (ssh_host, ssh_port),
+        ssh_username=ssh_user,
+        ssh_password=ssh_pass,
+        remote_bind_address=(inc_host, inc_port),
+        local_bind_address=("127.0.0.1", local_port),
+    )
+    _tunnel.start()
+    _tunnel_local_port = _tunnel.local_bind_port
+    return _tunnel_local_port
+
+
+def stop_tunnel() -> None:
+    """关闭 SSH 隧道（应用退出时调用）。"""
+    global _tunnel
+    if _tunnel is not None:
+        _tunnel.stop()
+        _tunnel = None
+
+
+# ──────────────────────────── Inceptor 连接 ────────────────────────────
+
+def get_db() -> hive.Connection:
+    """
+    建立并返回一个 Inceptor (Hive/LDAP) 连接。
+    连接通过 SSH 隧道的本地端口转发到真实 Inceptor 服务。
+    每次请求创建新连接，由 Flask teardown 负责关闭。
+    """
+    local_port = start_tunnel()
+    cfg = _load_config()
+    username = cfg.get("inceptor", "username")
+    password = cfg.get("inceptor", "password")
+    database = cfg.get("inceptor", "database", fallback="default")
+
+    conn = hive.Connection(
+        host="127.0.0.1",
+        port=local_port,
+        username=username,
+        password=password,
+        auth="LDAP",
+        database=database,
+    )
     return conn
 
 
-def init_db():
-    """建表并写入示例数据（仅首次运行）"""
-    conn = get_db()
-    cur = conn.cursor()
+# ──────────────────────────── 查询工具 ────────────────────────────
 
-    # 账户表
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS accounts (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            account_no  TEXT    NOT NULL UNIQUE,   -- 账号
-            account_name TEXT   NOT NULL,          -- 户名
-            customer_no TEXT    NOT NULL,          -- 客户号
-            id_card     TEXT,                      -- 证件号码
-            open_date   TEXT,                      -- 开户日期
-            status      TEXT    DEFAULT '正常',    -- 账户状态
-            balance     REAL    DEFAULT 0.0,       -- 余额
-            currency    TEXT    DEFAULT 'CNY',     -- 币种
-            branch      TEXT                       -- 开户网点
-        )
-    """)
+def query_db(
+    conn: hive.Connection,
+    sql: str,
+    params: Tuple[Any, ...] = (),
+) -> List[Dict[str, Any]]:
+    """
+    执行参数化 SQL 并以字典列表形式返回结果。
 
-    # 交易流水表
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS transactions (
-            id              INTEGER PRIMARY KEY AUTOINCREMENT,
-            trans_date      TEXT    NOT NULL,          -- 交易日期
-            trans_time      TEXT,                      -- 交易时间
-            account_no      TEXT    NOT NULL,          -- 账号
-            account_name    TEXT    NOT NULL,          -- 户名
-            customer_no     TEXT    NOT NULL,          -- 客户号
-            trans_type      TEXT,                      -- 交易类型
-            amount          REAL,                      -- 交易金额
-            direction       TEXT,                      -- 借/贷
-            balance_after   REAL,                      -- 交易后余额
-            channel         TEXT,                      -- 交易渠道
-            remark          TEXT                       -- 摘要
-        )
-    """)
+    使用 cursor.description 获取列名，自动去除 Hive 返回列名中的表名前缀
+    （如 "accounts.account_no" → "account_no"）。
 
-    # 若已有数据则跳过
-    if cur.execute("SELECT COUNT(*) FROM accounts").fetchone()[0] > 0:
-        conn.close()
-        return
+    :param conn:   Hive 连接对象
+    :param sql:    SQL 语句（%s 为 pyhive 参数占位符）
+    :param params: 对应 SQL 中每个 %s 的参数元组
+    :returns:      查询结果，每行为一个字典
+    """
+    cursor = conn.cursor()
+    cursor.execute(sql, params if params else None)
+    if not cursor.description:
+        return []
+    # 去除 Hive 列名中可能携带的表名前缀（tablename.column → column）
+    columns = [desc[0].split(".")[-1] for desc in cursor.description]
+    rows = cursor.fetchall()
+    return [dict(zip(columns, row)) for row in rows]
 
-    # -------- 示例数据 --------
-    accounts_data = [
-        ("6222021234567890", "张三",   "C10001", "110101199001011234", "2015-03-10", "正常",  58632.50,  "CNY", "北京朝阳支行"),
-        ("6222021234567891", "李四",   "C10002", "310101198505152345", "2018-07-22", "正常",  12500.00,  "CNY", "上海浦东支行"),
-        ("6222021234567892", "王五",   "C10003", "440101199210203456", "2020-01-05", "正常",  203400.00, "CNY", "广州天河支行"),
-        ("6222021234567893", "赵六",   "C10004", "330101197803074567", "2012-11-30", "冻结",  0.00,      "CNY", "杭州西湖支行"),
-        ("6222021234567894", "孙七",   "C10005", "210101200001015678", "2022-06-15", "正常",  3200.00,   "CNY", "沈阳和平支行"),
-        ("6222021234567895", "周八",   "C10006", "510101196812126789", "2009-04-18", "正常",  987654.00, "CNY", "成都锦江支行"),
-        ("6222021234567896", "吴九",   "C10007", "320101199507307890", "2019-09-09", "注销",  0.00,      "CNY", "南京鼓楼支行"),
-        ("6222021234567897", "郑十",   "C10008", "130101198901018901", "2017-02-14", "正常",  45000.00,  "CNY", "石家庄桥西支行"),
-        ("6222021234567898", "陈一一", "C10009", "420101200103030012", "2023-03-01", "正常",  8800.00,   "CNY", "武汉武昌支行"),
-        ("6222021234567899", "林二二", "C10010", "350101197606061234", "2011-08-20", "正常",  320000.00, "CNY", "福州台江支行"),
-    ]
-
-    cur.executemany("""
-        INSERT INTO accounts
-            (account_no, account_name, customer_no, id_card, open_date, status, balance, currency, branch)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, accounts_data)
-
-    # 为每个账户生成近 90 天的随机交易记录
-    today = date.today()
-    trans_types = ["转账汇款", "消费支出", "工资收入", "利息入账", "ATM取款", "手机支付", "网银支付", "跨行转账"]
-    channels = ["网银", "手机银行", "柜台", "ATM", "POS", "第三方支付"]
-    remarks = ["日常消费", "工资", "转账", "取现", "利息", "还款", "充值", "退款"]
-
-    for acc_no, acc_name, cust_no, *_ in accounts_data:
-        balance = random.uniform(1000, 50000)
-        for day_offset in range(90):
-            trans_date = (today - timedelta(days=day_offset)).strftime("%Y-%m-%d")
-            n = random.randint(0, 3)
-            for _ in range(n):
-                amount = round(random.uniform(10, 5000), 2)
-                direction = random.choice(["贷", "借"])
-                if direction == "贷":
-                    balance += amount
-                else:
-                    balance = max(0, balance - amount)
-                cur.execute("""
-                    INSERT INTO transactions
-                        (trans_date, trans_time, account_no, account_name, customer_no,
-                         trans_type, amount, direction, balance_after, channel, remark)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    trans_date,
-                    f"{random.randint(8, 22):02d}:{random.randint(0, 59):02d}:{random.randint(0, 59):02d}",
-                    acc_no, acc_name, cust_no,
-                    random.choice(trans_types),
-                    amount, direction,
-                    round(balance, 2),
-                    random.choice(channels),
-                    random.choice(remarks),
-                ))
-
-    conn.commit()
-    conn.close()
-    print("数据库初始化完成，示例数据已写入。")

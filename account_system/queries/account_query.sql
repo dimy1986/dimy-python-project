@@ -1,0 +1,22 @@
+-- ============================================================
+-- 账户信息查询 SQL 模板
+-- 说明：
+--   {field}  由 Python 代码在执行前替换为实际列名（来自白名单校验）
+--   %s       为 pyhive 参数占位符，对应查询关键词（含通配符，例如 %张三%）
+--
+-- 如需修改查询的表名或列名，请直接编辑本文件。
+-- 请确保 {field} 替换后的列名在 Inceptor 表中实际存在。
+-- ============================================================
+
+SELECT
+    account_no,
+    account_name,
+    customer_no,
+    id_card,
+    open_date,
+    status,
+    balance,
+    currency,
+    branch
+FROM accounts
+WHERE {field} LIKE %s
