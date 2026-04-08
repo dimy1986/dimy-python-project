@@ -9,6 +9,7 @@ SQL 查询语句从外部 queries/*.sql 文件加载，不在代码中写死。
 
 import configparser
 import os
+import re
 import sys
 from typing import Any, Dict, List, Tuple
 
@@ -197,17 +198,21 @@ def query_db(
     """
     cursor = conn.cursor()
     # pyhive 内部用 Python 的 % 格式化来替换 %s 占位符。
-    # 若 SQL 中存在 Hive 日期格式化函数的格式串（如 '%Y%m%d'、'%m' 等），
+    # SQL 注释（-- ...）中常含有 "%s" 说明文字和 "%张三%" 通配符示例，
     # 这些字面量 % 会被 pyhive 误作格式说明符，导致
     # "not enough arguments for format string" 错误。
     # 解决方法：
-    #   1. 先将所有 %s 占位符替换为不可能出现在 SQL 中的临时令牌
-    #   2. 将剩余的所有字面量 % 转义为 %%
-    #   3. 将临时令牌还原为 %s
+    #   1. 先剥除所有 SQL 行注释（-- ...），注释对执行无影响
+    #   2. 再将所有 %s 占位符替换为临时令牌，转义其余字面量 % 为 %%，最后还原占位符
+    sql_exec = re.sub(r"--[^\n]*", "", sql)   # 去掉行注释
     if params:
         _PLACEHOLDER = "\x00__PYHIVE_PARAM__\x00"
-        sql = sql.replace("%s", _PLACEHOLDER).replace("%", "%%").replace(_PLACEHOLDER, "%s")
-    cursor.execute(sql, params if params else None)
+        sql_exec = (
+            sql_exec.replace("%s", _PLACEHOLDER)
+                    .replace("%", "%%")
+                    .replace(_PLACEHOLDER, "%s")
+        )
+    cursor.execute(sql_exec, params if params else None)
     if not cursor.description:
         return []
     # 去除 Hive 列名中可能携带的表名前缀（tablename.column → column）
