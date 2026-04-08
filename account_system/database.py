@@ -7,10 +7,24 @@
 
 import sqlite3
 import os
+import sys
 from datetime import date, timedelta
 import random
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "bank_data.db")
+
+def _get_db_path() -> str:
+    """
+    返回数据库文件路径。
+    - 打包为 exe 后：数据库放在 exe 所在目录（可持久保存，升级 exe 不丢失数据）。
+    - 普通 Python 运行：数据库放在本文件所在目录。
+    """
+    if getattr(sys, "frozen", False):
+        # sys.executable 指向 .exe 文件本身
+        return os.path.join(os.path.dirname(sys.executable), "bank_data.db")
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "bank_data.db")
+
+
+DB_PATH = _get_db_path()
 
 
 def get_db():

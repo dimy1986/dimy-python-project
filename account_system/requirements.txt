@@ -1,3 +1,6 @@
 flask>=2.3.0
 pandas>=2.0.0
 openpyxl>=3.1.0
+
+# 打包工具（仅在打包时需要，运行时不需要）
+# pyinstaller>=6.0.0

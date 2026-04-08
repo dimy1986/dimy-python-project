@@ -3,7 +3,7 @@
 """
 账户与交易查询系统 — Flask 主程序
 运行: python app.py
-访问: http://0.0.0.0:5000 (内网可通过 http://<本机IP>:5000 访问)
+访问: http://localhost:5000 (内网可通过 http://<本机IP>:5000 访问)
 
 生产环境建议使用 Gunicorn 等 WSGI 服务器启动:
     pip install gunicorn
@@ -12,13 +12,14 @@
 
 import io
 import os
-import sqlite3
+import sys
+import threading
+import webbrowser
 
 import pandas as pd
 from flask import (
     Flask,
     g,
-    redirect,
     render_template,
     request,
     send_file,
@@ -27,7 +28,20 @@ from flask import (
 
 from database import DB_PATH, get_db, init_db
 
-app = Flask(__name__)
+
+def _get_template_folder() -> str:
+    """
+    返回模板目录路径，兼容 PyInstaller 打包后的运行环境。
+    打包后所有 datas 文件被释放到 sys._MEIPASS 目录。
+    """
+    if getattr(sys, "frozen", False):
+        meipass = getattr(sys, "_MEIPASS", None)
+        if meipass:
+            return os.path.join(meipass, "templates")
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "templates")
+
+
+app = Flask(__name__, template_folder=_get_template_folder())
 
 # Allowlist of column names that may be used in dynamic SQL fragments.
 # These must exactly match column names in the transactions table.
@@ -240,5 +254,20 @@ def transaction_download():
 
 if __name__ == "__main__":
     init_db()
+
+    port = 5000
+    url = f"http://localhost:{port}"
+
+    # 延迟 1.2 秒后自动打开默认浏览器（给 Flask 启动时间）
+    def _open_browser():
+        import time
+        time.sleep(1.2)
+        webbrowser.open(url)
+
+    browser_thread = threading.Thread(target=_open_browser, daemon=True)
+    browser_thread.start()
+
+    print(f"启动成功，请在浏览器访问: {url}")
+    print("按 Ctrl+C 退出程序")
     # host="0.0.0.0" 使局域网内其他机器也能访问
-    app.run(host="0.0.0.0", port=5000, debug=False)
+    app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
