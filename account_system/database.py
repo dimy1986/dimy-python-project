@@ -10,7 +10,7 @@ SQL 查询语句从外部 queries/*.sql 文件加载，不在代码中写死。
 import configparser
 import os
 import sys
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
 from pyhive import hive
 from sshtunnel import SSHTunnelForwarder
@@ -91,64 +91,80 @@ def load_query(name: str) -> str:
         return f.read()
 
 
-# ──────────────────────────── SSH 隧道（单例）────────────────────────────
+# ──────────────────────────── SSH 隧道（按节点名索引）────────────────────────────
 
-_tunnel: Optional[SSHTunnelForwarder] = None
-_tunnel_local_port: int = 0
+# 每个 Inceptor 节点维护一个独立的 SSH 隧道，以节点名（config.ini 中的 section 名）为键。
+_tunnels: Dict[str, Tuple[SSHTunnelForwarder, int]] = {}
 
 
-def start_tunnel() -> int:
+def start_tunnel(section: str = "inceptor") -> int:
     """
-    启动 SSH 隧道并返回本地绑定端口。若隧道已激活则直接返回端口号。
-    隧道参数从 config.ini 读取。
-    """
-    global _tunnel, _tunnel_local_port
+    启动到指定 Inceptor 节点的 SSH 隧道，返回本地绑定端口。
+    若该节点的隧道已激活则直接返回已绑定端口。
 
-    if _tunnel is not None and _tunnel.is_active:
-        return _tunnel_local_port
+    :param section: config.ini 中对应 Inceptor 节点的 section 名，默认为 "inceptor"。
+                    例如 "inceptor"、"inceptor2"，与 config.ini 及 queries/*.json 中的
+                    "inceptor" 字段保持一致。
+    """
+    global _tunnels
+
+    existing = _tunnels.get(section)
+    if existing is not None:
+        tunnel, port = existing
+        if tunnel.is_active:
+            return port
 
     cfg = _load_config()
+    if not cfg.has_section(section):
+        raise ValueError(
+            f"config.ini 中未找到节点 [{section}]，"
+            f"请参照 config.ini.example 添加该节点的配置。"
+        )
+
     ssh_host = cfg.get("ssh", "host")
     ssh_port = cfg.getint("ssh", "port", fallback=22)
     ssh_user = cfg.get("ssh", "username")
     ssh_pass = cfg.get("ssh", "password")
-    inc_host = cfg.get("inceptor", "host")
-    inc_port = cfg.getint("inceptor", "port")
-    local_port = cfg.getint("inceptor", "local_port", fallback=9999)
+    inc_host = cfg.get(section, "host")
+    inc_port = cfg.getint(section, "port")
+    local_port = cfg.getint(section, "local_port", fallback=9999)
 
-    _tunnel = SSHTunnelForwarder(
+    tunnel = SSHTunnelForwarder(
         (ssh_host, ssh_port),
         ssh_username=ssh_user,
         ssh_password=ssh_pass,
         remote_bind_address=(inc_host, inc_port),
         local_bind_address=("127.0.0.1", local_port),
     )
-    _tunnel.start()
-    _tunnel_local_port = _tunnel.local_bind_port
-    return _tunnel_local_port
+    tunnel.start()
+    bound_port = tunnel.local_bind_port
+    _tunnels[section] = (tunnel, bound_port)
+    return bound_port
 
 
 def stop_tunnel() -> None:
-    """关闭 SSH 隧道（应用退出时调用）。"""
-    global _tunnel
-    if _tunnel is not None:
-        _tunnel.stop()
-        _tunnel = None
+    """关闭所有已启动的 SSH 隧道（应用退出时调用）。"""
+    global _tunnels
+    for tunnel, _ in _tunnels.values():
+        tunnel.stop()
+    _tunnels.clear()
 
 
 # ──────────────────────────── Inceptor 连接 ────────────────────────────
 
-def get_db() -> hive.Connection:
+def get_db(section: str = "inceptor") -> hive.Connection:
     """
     建立并返回一个 Inceptor (Hive/LDAP) 连接。
     连接通过 SSH 隧道的本地端口转发到真实 Inceptor 服务。
     每次请求创建新连接，由 Flask teardown 负责关闭。
+
+    :param section: config.ini 中对应 Inceptor 节点的 section 名，默认为 "inceptor"。
     """
-    local_port = start_tunnel()
+    local_port = start_tunnel(section)
     cfg = _load_config()
-    username = cfg.get("inceptor", "username")
-    password = cfg.get("inceptor", "password")
-    database = cfg.get("inceptor", "database", fallback="default")
+    username = cfg.get(section, "username")
+    password = cfg.get(section, "password")
+    database = cfg.get(section, "database", fallback="default")
 
     conn = hive.Connection(
         host="127.0.0.1",

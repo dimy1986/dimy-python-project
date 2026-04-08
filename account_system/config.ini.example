@@ -14,9 +14,19 @@ port     = 22
 username = YOUR_SSH_USERNAME
 password = *****
 
+# ──────────────────────────────────────────────────────────────
+# Inceptor 节点配置说明
+# ──────────────────────────────────────────────────────────────
+# 每个 Inceptor 节点对应一个 [inceptor] 或 [inceptor2]、[inceptor3] 等配置段。
+# 在 queries/*.json 中用 "inceptor": "<节点名>" 指定该查询使用哪个节点。
+# 若 JSON 中未填写 "inceptor" 字段，则默认使用 [inceptor] 节。
+# 每个节点需要占用一个不同的 local_port，以免端口冲突。
+# ──────────────────────────────────────────────────────────────
+
 [inceptor]
+# 第一个 Inceptor 节点（默认节点，JSON 中不填 "inceptor" 字段时使用此节点）
 # Inceptor 服务在内网中的真实地址与端口（Hive JDBC 端口，通常为 10000 或 10002）
-host     = YOUR_INCEPTOR_HOST
+host     = YOUR_INCEPTOR_HOST_1
 port     = 10002
 # 本地绑定端口（SSH 隧道将把远端端口映射到此本地端口，不与其他服务冲突即可）
 local_port = 9999
@@ -24,4 +34,14 @@ local_port = 9999
 username = YOUR_INCEPTOR_USERNAME
 password = *****
 # 默认连接的数据库名
+database = YOUR_DATABASE_NAME
+
+[inceptor2]
+# 第二个 Inceptor 节点（示例，节点名可自定义，JSON 中填 "inceptor": "inceptor2" 时使用）
+host     = YOUR_INCEPTOR_HOST_2
+port     = 10002
+# 注意：local_port 必须与其他节点不同，避免端口冲突
+local_port = 9998
+username = YOUR_INCEPTOR_USERNAME
+password = *****
 database = YOUR_DATABASE_NAME

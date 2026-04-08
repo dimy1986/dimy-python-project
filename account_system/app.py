@@ -77,17 +77,24 @@ def _inject_query_configs():
 
 # ──────────────────────────── 数据库连接管理 ────────────────────────────
 
-def get_connection():
-    if "db" not in g:
-        g.db = get_db()
-    return g.db
+def get_connection(inceptor: str = "inceptor"):
+    """
+    返回当前请求中指定 Inceptor 节点的数据库连接（懒建立，请求内复用）。
+    所有连接统一存储在 g._db_connections 字典中，由 teardown 统一关闭。
+    """
+    if not hasattr(g, "_db_connections"):
+        g._db_connections = {}
+    if inceptor not in g._db_connections:
+        g._db_connections[inceptor] = get_db(inceptor)
+    return g._db_connections[inceptor]
 
 
 @app.teardown_appcontext
 def close_connection(exception):
-    db = g.pop("db", None)
-    if db is not None:
-        db.close()
+    connections = g.pop("_db_connections", None)
+    if connections:
+        for db in connections.values():
+            db.close()
 
 
 # ──────────────────────────── 首页 ────────────────────────────
@@ -110,6 +117,7 @@ def _make_query_view(query_id: str, cfg: dict):
     """为指定查询 ID 生成 GET / POST 路由处理函数。"""
     allowlist = {sf["value"] for sf in cfg["search_fields"]}
     default_field = cfg["search_fields"][0]["value"]
+    inceptor = cfg.get("inceptor", "inceptor")
 
     def view():
         results = []
@@ -140,7 +148,7 @@ def _make_query_view(query_id: str, cfg: dict):
                 try:
                     sql = load_query(query_id).format(field=field)
                     results = query_db(
-                        get_connection(), sql,
+                        get_connection(inceptor), sql,
                         _build_params(cfg, keyword, date_from, date_to),
                     )
                 except Exception as exc:
@@ -167,6 +175,7 @@ def _make_download_view(query_id: str, cfg: dict):
     """为指定查询 ID 生成 Excel 下载路由处理函数。"""
     allowlist = {sf["value"] for sf in cfg["search_fields"]}
     default_field = cfg["search_fields"][0]["value"]
+    inceptor = cfg.get("inceptor", "inceptor")
 
     def download():
         keyword = request.form.get("keyword", "").strip()
@@ -177,7 +186,7 @@ def _make_download_view(query_id: str, cfg: dict):
         field = search_type if search_type in allowlist else default_field
         sql = load_query(query_id).format(field=field)
         rows = query_db(
-            get_connection(), sql,
+            get_connection(inceptor), sql,
             _build_params(cfg, keyword, date_from, date_to),
         )
 

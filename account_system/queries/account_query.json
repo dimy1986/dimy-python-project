@@ -3,6 +3,7 @@
     "icon": "👤",
     "description": "按账号或户名检索账户基本信息，支持模糊匹配，结果可下载",
     "sheet_name": "账户查询结果",
+    "inceptor": "inceptor",
     "empty_message": "未查询到符合条件的账户，请检查关键词后重试。",
     "result_count_label": "账户记录",
     "keyword_placeholder": "请输入账号或户名",
