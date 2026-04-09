@@ -14,14 +14,14 @@
         {"value": "a.chn_nm", "label": "按户名"}
     ],
     "columns": [
-        {"key": "a.cst_id",   "label": "统一客户编号"},
-        {"key": "b.crdt_no", "label": "证件号码"},
-        {"key": "c.dbcrd_cardno",  "label": "借记卡卡号"},
-        {"key": "chn_nm",      "label": "中文名称"},
-        {"key": "fam_adr",    "label": "家庭地址"},
-        {"key": "mblph_no",       "label": "移动电话"},
-        {"key": "opnacc_dt",      "label": "开户日期"},
-        {"key": "opnacc_inst_nm",     "label": "开户机构名称"},
-        {"key": "opnacc_inst",       "label": "开户机构"}
+        {"key": "统一客户编号", "label": "统一客户编号"},
+        {"key": "证件号码",     "label": "证件号码"},
+        {"key": "借记卡卡号",   "label": "借记卡卡号"},
+        {"key": "中文名称",     "label": "中文名称"},
+        {"key": "家庭地址",     "label": "家庭地址"},
+        {"key": "移动电话",     "label": "移动电话"},
+        {"key": "开户日期",     "label": "开户日期"},
+        {"key": "开户机构名称", "label": "开户机构名称"},
+        {"key": "开户机构",     "label": "开户机构"}
     ]
 }
