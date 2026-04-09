@@ -27,6 +27,7 @@ from flask import (
     render_template,
     request,
     send_file,
+    session,
 )
 
 from database import get_db, get_queries_dir, load_query, query_db, start_tunnel, stop_tunnel
@@ -45,6 +46,7 @@ def _get_template_folder() -> str:
 
 
 app = Flask(__name__, template_folder=_get_template_folder())
+app.secret_key = os.urandom(24)
 
 
 # ──────────────────────────── 查询配置加载 ────────────────────────────
@@ -158,8 +160,35 @@ def _make_query_view(query_id: str, cfg: dict):
                         get_connection(inceptor), sql,
                         _build_params(cfg, keyword, date_from, date_to),
                     )
+                    # 保存本次查询参数，以便切换页面后返回时自动恢复
+                    session[query_id] = {
+                        "keyword": keyword,
+                        "search_type": search_type,
+                        "date_from": date_from,
+                        "date_to": date_to,
+                    }
                 except Exception as exc:
                     error = f"查询失败：{exc}"
+
+        else:
+            # GET 请求：若 session 中有上次查询参数，自动恢复并重新执行
+            saved = session.get(query_id)
+            if saved:
+                keyword = saved.get("keyword", "")
+                search_type = saved.get("search_type", default_field)
+                date_from = saved.get("date_from", "")
+                date_to = saved.get("date_to", "")
+                if keyword:
+                    searched = True
+                    field = search_type if search_type in allowlist else default_field
+                    try:
+                        sql = load_query(query_id).format(field=field)
+                        results = query_db(
+                            get_connection(inceptor), sql,
+                            _build_params(cfg, keyword, date_from, date_to),
+                        )
+                    except Exception as exc:
+                        error = f"查询失败：{exc}"
 
         _PAGE_LIMIT = 100
         total_count = len(results)
