@@ -67,7 +67,7 @@
   </div>
   {% endif %}
   <div class="table-wrap">
-    <table>
+    <table id="result-table">
       <thead>
         <tr>
           {% for col in cfg.columns %}
@@ -98,6 +98,67 @@
       </tbody>
     </table>
   </div>
+  <div class="pagination" id="pagination"></div>
+  <script>
+  (function () {
+    var PAGE_SIZE = 20;
+    var currentPage = 1;
+    var tbody = document.querySelector('#result-table tbody');
+    var rows = tbody ? Array.from(tbody.querySelectorAll('tr')) : [];
+    var totalPages = Math.ceil(rows.length / PAGE_SIZE);
+
+    function showPage(page) {
+      currentPage = page;
+      var start = (page - 1) * PAGE_SIZE;
+      var end = start + PAGE_SIZE;
+      rows.forEach(function (tr, i) {
+        tr.style.display = (i >= start && i < end) ? '' : 'none';
+      });
+      renderPager();
+    }
+
+    function renderPager() {
+      var el = document.getElementById('pagination');
+      if (!el || totalPages <= 1) return;
+      el.innerHTML = '';
+
+      function btn(label, page, disabled, active) {
+        var b = document.createElement('button');
+        b.textContent = label;
+        if (disabled) b.disabled = true;
+        if (active) b.classList.add('active');
+        if (!disabled && !active) {
+          b.addEventListener('click', function () { showPage(page); });
+        }
+        return b;
+      }
+
+      el.appendChild(btn('‹ 上一页', currentPage - 1, currentPage === 1, false));
+
+      var start = Math.max(1, currentPage - 2);
+      var end   = Math.min(totalPages, currentPage + 2);
+      if (start > 1) {
+        el.appendChild(btn('1', 1, false, false));
+        if (start > 2) { var sp = document.createElement('span'); sp.className='page-info'; sp.textContent='…'; el.appendChild(sp); }
+      }
+      for (var p = start; p <= end; p++) {
+        el.appendChild(btn(String(p), p, false, p === currentPage));
+      }
+      if (end < totalPages) {
+        if (end < totalPages - 1) { var sp2 = document.createElement('span'); sp2.className='page-info'; sp2.textContent='…'; el.appendChild(sp2); }
+        el.appendChild(btn(String(totalPages), totalPages, false, false));
+      }
+      el.appendChild(btn('下一页 ›', currentPage + 1, currentPage === totalPages, false));
+
+      var info = document.createElement('span');
+      info.className = 'page-info';
+      info.textContent = '第 ' + currentPage + ' / ' + totalPages + ' 页';
+      el.appendChild(info);
+    }
+
+    if (rows.length > 0) showPage(1);
+  })();
+  </script>
   {% else %}
   <div class="alert alert-warning">{{ cfg.empty_message }}</div>
   {% endif %}
