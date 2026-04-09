@@ -9,14 +9,14 @@
 -- ============================================================
 
 SELECT
-    account_no,
-    account_name,
-    customer_no,
-    id_card,
-    open_date,
-    status,
-    balance,
-    currency,
-    branch
+    统一客户编号,
+    证件号码,
+    借记卡卡号,
+    中文名称,
+    家庭地址,
+    移动电话,
+    开户日期,
+    开户机构名称,
+    开户机构
 FROM accounts
 WHERE {field} LIKE %s
