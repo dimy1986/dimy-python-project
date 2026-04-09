@@ -11,7 +11,7 @@ import configparser
 import os
 import re
 import sys
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional
 
 from pyhive import hive
 from sshtunnel import SSHTunnelForwarder
@@ -92,28 +92,34 @@ def load_query(name: str) -> str:
         return f.read()
 
 
-# ──────────────────────────── SSH 隧道（按节点名索引）────────────────────────────
+# ──────────────────────────── SSH 隧道（单连接多端口转发）────────────────────────────
 
-# 每个 Inceptor 节点维护一个独立的 SSH 隧道，以节点名（config.ini 中的 section 名）为键。
-_tunnels: Dict[str, Tuple[SSHTunnelForwarder, int]] = {}
+# 所有 inceptor 节点共用一个 SSHTunnelForwarder（单条 SSH 连接），
+# 通过 remote_bind_addresses 同时转发多个端口，避免对同一跳板机建立多条 SSH 连接
+# 导致 "Could not establish session to SSH gateway" 错误。
+_shared_tunnel: Optional[SSHTunnelForwarder] = None
+_section_port_map: Dict[str, int] = {}     # section 名 → 本地已绑定端口
+
+
+def _inceptor_sections(cfg: configparser.ConfigParser) -> List[str]:
+    """返回 config.ini 中所有以 'inceptor' 开头的节（按字典序排列）。"""
+    return sorted(s for s in cfg.sections() if s.startswith("inceptor"))
 
 
 def start_tunnel(section: str = "inceptor") -> int:
     """
-    启动到指定 Inceptor 节点的 SSH 隧道，返回本地绑定端口。
-    若该节点的隧道已激活则直接返回已绑定端口。
+    确保到所有 Inceptor 节点的 SSH 隧道已就绪，返回指定节点的本地绑定端口。
+    所有节点共用同一条 SSH 连接（单个 SSHTunnelForwarder + 多个 remote_bind_addresses），
+    避免对跳板机建立多条并发 SSH 连接。
 
     :param section: config.ini 中对应 Inceptor 节点的 section 名，默认为 "inceptor"。
-                    例如 "inceptor"、"inceptor2"，与 config.ini 及 queries/*.json 中的
-                    "inceptor" 字段保持一致。
     """
-    global _tunnels
+    global _shared_tunnel, _section_port_map
 
-    existing = _tunnels.get(section)
-    if existing is not None:
-        tunnel, port = existing
-        if tunnel.is_active:
-            return port
+    # 隧道活跃且已有映射，直接返回
+    if _shared_tunnel is not None and _shared_tunnel.is_active:
+        if section in _section_port_map:
+            return _section_port_map[section]
 
     cfg = _load_config()
     if not cfg.has_section(section):
@@ -122,33 +128,56 @@ def start_tunnel(section: str = "inceptor") -> int:
             f"请参照 config.ini.example 添加该节点的配置。"
         )
 
+    # 关闭旧隧道（如有）
+    if _shared_tunnel is not None:
+        try:
+            _shared_tunnel.stop()
+        except Exception:
+            pass
+
     ssh_host = cfg.get("ssh", "host")
     ssh_port = cfg.getint("ssh", "port", fallback=22)
     ssh_user = cfg.get("ssh", "username")
     ssh_pass = cfg.get("ssh", "password")
-    inc_host = cfg.get(section, "host")
-    inc_port = cfg.getint(section, "port")
-    local_port = cfg.getint(section, "local_port", fallback=9999)
 
-    tunnel = SSHTunnelForwarder(
+    sections = _inceptor_sections(cfg)
+    remote_binds = [
+        (cfg.get(s, "host"), cfg.getint(s, "port"))
+        for s in sections
+    ]
+    local_binds = [
+        ("127.0.0.1", cfg.getint(s, "local_port", fallback=9999))
+        for s in sections
+    ]
+
+    _shared_tunnel = SSHTunnelForwarder(
         (ssh_host, ssh_port),
         ssh_username=ssh_user,
         ssh_password=ssh_pass,
-        remote_bind_address=(inc_host, inc_port),
-        local_bind_address=("127.0.0.1", local_port),
+        remote_bind_addresses=remote_binds,
+        local_bind_addresses=local_binds,
     )
-    tunnel.start()
-    bound_port = tunnel.local_bind_port
-    _tunnels[section] = (tunnel, bound_port)
-    return bound_port
+    _shared_tunnel.start()
+
+    _section_port_map = {
+        s: _shared_tunnel.local_bind_ports[i]
+        for i, s in enumerate(sections)
+    }
+
+    if section not in _section_port_map:
+        raise ValueError(
+            f"节点 [{section}] 的端口映射未建立，请检查 config.ini 配置。"
+        )
+    return _section_port_map[section]
 
 
 def stop_tunnel() -> None:
-    """关闭所有已启动的 SSH 隧道（应用退出时调用）。"""
-    global _tunnels
-    for tunnel, _ in _tunnels.values():
-        tunnel.stop()
-    _tunnels.clear()
+    """关闭共享 SSH 隧道（应用退出时调用）。"""
+    global _shared_tunnel, _section_port_map
+    if _shared_tunnel is not None:
+        _shared_tunnel.stop()
+        _shared_tunnel = None
+    _section_port_map.clear()
 
 
 # ──────────────────────────── Inceptor 连接 ────────────────────────────
@@ -183,7 +212,7 @@ def get_db(section: str = "inceptor") -> hive.Connection:
 def query_db(
     conn: hive.Connection,
     sql: str,
-    params: Tuple[Any, ...] = (),
+    params: tuple = (),
 ) -> List[Dict[str, Any]]:
     """
     执行参数化 SQL 并以字典列表形式返回结果。
