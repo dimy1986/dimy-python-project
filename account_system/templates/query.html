@@ -48,7 +48,7 @@
   {% elif results %}
   <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
     <div class="result-info">
-      共找到 <span>{{ results|length }}</span> 条{{ cfg.result_count_label }}
+      共找到 <span>{{ total_count }}</span> 条{{ cfg.result_count_label }}
       {% if cfg.date_range %}（{{ date_from }} 至 {{ date_to }}）{% endif %}
     </div>
     <form method="POST" action="{{ url_for(query_id + '_download') }}">
@@ -61,6 +61,11 @@
       <button type="submit" class="btn btn-success">⬇ 下载 Excel</button>
     </form>
   </div>
+  {% if total_count > page_limit %}
+  <div class="alert alert-warning" style="margin-bottom:12px;">
+    ⚠ 结果超过 {{ page_limit }} 条，页面仅显示前 {{ page_limit }} 条记录，完整数据请点击右上角「下载 Excel」。
+  </div>
+  {% endif %}
   <div class="table-wrap">
     <table>
       <thead>

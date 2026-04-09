@@ -154,11 +154,17 @@ def _make_query_view(query_id: str, cfg: dict):
                 except Exception as exc:
                     error = f"查询失败：{exc}"
 
+        _PAGE_LIMIT = 100
+        total_count = len(results)
+        display_results = results[:_PAGE_LIMIT]
+
         return render_template(
             "query.html",
             cfg=cfg,
             query_id=query_id,
-            results=results,
+            results=display_results,
+            total_count=total_count,
+            page_limit=_PAGE_LIMIT,
             keyword=keyword,
             search_type=search_type,
             date_from=date_from,
