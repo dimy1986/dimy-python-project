@@ -4,23 +4,23 @@
 {% block content %}
 <div class="card">
   <div class="card-title">{{ cfg.title }}</div>
-  <form method="POST" action="{{ url_for(query_id) }}">
+  <form id="query-form">
     {% if cfg.date_range %}
     <div class="form-row" style="margin-bottom:14px;">
       <div class="form-group">
         <label>开始日期</label>
-        <input type="date" name="date_from" value="{{ date_from }}" required>
+        <input id="f-date-from" type="date" name="date_from" value="{{ date_from }}">
       </div>
       <div class="form-group">
         <label>结束日期</label>
-        <input type="date" name="date_to" value="{{ date_to }}" required>
+        <input id="f-date-to" type="date" name="date_to" value="{{ date_to }}">
       </div>
     </div>
     {% endif %}
     <div class="form-row">
       <div class="form-group">
         <label>查询类型</label>
-        <select name="search_type">
+        <select id="f-search-type" name="search_type">
           {% for sf in cfg.search_fields %}
           <option value="{{ sf.value }}" {% if search_type == sf.value %}selected{% endif %}>{{ sf.label }}</option>
           {% endfor %}
@@ -28,92 +28,73 @@
       </div>
       <div class="form-group" style="flex:1; min-width:220px;">
         <label>查询关键词（支持模糊匹配）</label>
-        <input type="text" name="keyword" value="{{ keyword }}"
+        <input id="f-keyword" type="text" name="keyword" value="{{ keyword }}"
                placeholder="{{ cfg.keyword_placeholder }}" autocomplete="off">
       </div>
       <div class="form-group">
         <label>&nbsp;</label>
-        <button type="submit" class="btn btn-primary">🔍 查询</button>
+        <div style="display:flex; align-items:center; gap:12px;">
+          <button type="submit" id="search-btn" class="btn btn-primary">🔍 查询</button>
+          <span id="query-status" style="font-size:13px; display:none;"></span>
+        </div>
       </div>
     </div>
   </form>
 </div>
 
-{% if searched %}
-<div class="card">
+<div id="results-card" class="card" style="display:none;">
   <div class="card-title">查询结果</div>
+  <div id="results-container"></div>
+</div>
 
-  {% if error %}
-  <div class="alert alert-danger">{{ error }}</div>
-  {% elif results %}
-  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
-    <div class="result-info">
-      共找到 <span>{{ total_count }}</span> 条{{ cfg.result_count_label }}
-      {% if cfg.date_range %}（{{ date_from }} 至 {{ date_to }}）{% endif %}
-    </div>
-    <form method="POST" action="{{ url_for(query_id + '_download') }}">
-      {% if cfg.date_range %}
-      <input type="hidden" name="date_from" value="{{ date_from }}">
-      <input type="hidden" name="date_to"   value="{{ date_to }}">
-      {% endif %}
-      <input type="hidden" name="keyword"     value="{{ keyword }}">
-      <input type="hidden" name="search_type" value="{{ search_type }}">
-      <button type="submit" class="btn btn-success">⬇ 下载 Excel</button>
-    </form>
-  </div>
-  {% if total_count > page_limit %}
-  <div class="alert alert-warning" style="margin-bottom:12px;">
-    ⚠ 结果超过 {{ page_limit }} 条，页面仅显示前 {{ page_limit }} 条记录，完整数据请点击右上角「下载 Excel」。
-  </div>
-  {% endif %}
-  <div class="table-wrap">
-    <table id="result-table">
-      <thead>
-        <tr>
-          {% for col in cfg.columns %}
-          <th>{{ col.label }}</th>
-          {% endfor %}
-        </tr>
-      </thead>
-      <tbody>
-        {% for row in results %}
-        <tr>
-          {% for col in cfg.columns %}
-          {%- set fmt = col.get('format') or '' -%}
-          <td{% if fmt == 'money' %} style="text-align:right;"{% endif %}>
-            {%- set val = row[col.key] -%}
-            {%- if fmt == 'money' -%}
-              {{ "%.2f"|format(val) }}
-            {%- elif fmt == 'badge' -%}
-              {%- set bmap = col.get('badge_map') or {} -%}
-              {%- set css = bmap.get(val) or bmap.get('_default') or '' -%}
-              <span class="badge {{ css }}">{{ val }}</span>
-            {%- else -%}
-              {{ val }}
-            {%- endif -%}
-          </td>
-          {% endfor %}
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-  <div class="pagination" id="pagination"></div>
-  <script>
-  (function () {
-    var PAGE_SIZE = 20;
+<script>
+(function () {
+  'use strict';
+
+  /* ── 从 Jinja 注入的配置 ── */
+  var QUERY_ID       = {{ query_id | tojson }};
+  var COLUMNS        = {{ cfg.columns | tojson }};
+  var PAGE_LIMIT     = {{ page_limit }};
+  var RESULT_LABEL   = {{ cfg.result_count_label | tojson }};
+  var HAS_DATE_RANGE = {{ 'true' if cfg.date_range else 'false' }};
+  var DOWNLOAD_URL   = {{ url_for(query_id + '_download') | tojson }};
+  var API_URL        = {{ url_for(query_id + '_api') | tojson }};
+  var EMPTY_MSG      = {{ cfg.empty_message | tojson }};
+  var CACHE_KEY      = 'qcache_' + QUERY_ID;
+
+  /* ── 工具函数 ── */
+  function esc(s) {
+    return String(s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  function fmtCell(col, val) {
+    if (val === null || val === undefined || val === '') return '';
+    if (col.format === 'money') {
+      var n = parseFloat(val);
+      return isNaN(n) ? esc(String(val)) : n.toFixed(2);
+    }
+    if (col.format === 'badge') {
+      var bmap = col.badge_map || {};
+      var css  = bmap[val] || bmap['_default'] || '';
+      return '<span class="badge ' + esc(css) + '">' + esc(String(val)) + '</span>';
+    }
+    return esc(String(val));
+  }
+
+  /* ── 表格分页 ── */
+  function initPagination() {
+    var PAGE_SIZE  = 20;
     var currentPage = 1;
     var tbody = document.querySelector('#result-table tbody');
-    var rows = tbody ? Array.from(tbody.querySelectorAll('tr')) : [];
+    var rows  = tbody ? Array.from(tbody.querySelectorAll('tr')) : [];
     var totalPages = Math.ceil(rows.length / PAGE_SIZE);
 
     function showPage(page) {
       currentPage = page;
-      var start = (page - 1) * PAGE_SIZE;
-      var end = start + PAGE_SIZE;
-      rows.forEach(function (tr, i) {
-        tr.style.display = (i >= start && i < end) ? '' : 'none';
-      });
+      var s = (page - 1) * PAGE_SIZE, e = s + PAGE_SIZE;
+      rows.forEach(function (tr, i) { tr.style.display = (i >= s && i < e) ? '' : 'none'; });
       renderPager();
     }
 
@@ -126,30 +107,23 @@
         var b = document.createElement('button');
         b.textContent = label;
         if (disabled) b.disabled = true;
-        if (active) b.classList.add('active');
-        if (!disabled && !active) {
-          b.addEventListener('click', function () { showPage(page); });
-        }
+        if (active)   b.classList.add('active');
+        if (!disabled && !active) b.addEventListener('click', function () { showPage(page); });
         return b;
       }
 
       el.appendChild(btn('‹ 上一页', currentPage - 1, currentPage === 1, false));
-
-      var start = Math.max(1, currentPage - 2);
-      var end   = Math.min(totalPages, currentPage + 2);
-      if (start > 1) {
+      var s = Math.max(1, currentPage - 2), e = Math.min(totalPages, currentPage + 2);
+      if (s > 1) {
         el.appendChild(btn('1', 1, false, false));
-        if (start > 2) { var sp = document.createElement('span'); sp.className='page-info'; sp.textContent='…'; el.appendChild(sp); }
+        if (s > 2) { var sp = document.createElement('span'); sp.className = 'page-info'; sp.textContent = '…'; el.appendChild(sp); }
       }
-      for (var p = start; p <= end; p++) {
-        el.appendChild(btn(String(p), p, false, p === currentPage));
-      }
-      if (end < totalPages) {
-        if (end < totalPages - 1) { var sp2 = document.createElement('span'); sp2.className='page-info'; sp2.textContent='…'; el.appendChild(sp2); }
+      for (var p = s; p <= e; p++) el.appendChild(btn(String(p), p, false, p === currentPage));
+      if (e < totalPages) {
+        if (e < totalPages - 1) { var sp2 = document.createElement('span'); sp2.className = 'page-info'; sp2.textContent = '…'; el.appendChild(sp2); }
         el.appendChild(btn(String(totalPages), totalPages, false, false));
       }
       el.appendChild(btn('下一页 ›', currentPage + 1, currentPage === totalPages, false));
-
       var info = document.createElement('span');
       info.className = 'page-info';
       info.textContent = '第 ' + currentPage + ' / ' + totalPages + ' 页';
@@ -157,11 +131,147 @@
     }
 
     if (rows.length > 0) showPage(1);
-  })();
-  </script>
-  {% else %}
-  <div class="alert alert-warning">{{ cfg.empty_message }}</div>
-  {% endif %}
-</div>
-{% endif %}
+  }
+
+  /* ── 渲染结果 ── */
+  function renderResults(data) {
+    var card      = document.getElementById('results-card');
+    var container = document.getElementById('results-container');
+    card.style.display = '';
+
+    if (data.error) {
+      container.innerHTML = '<div class="alert alert-danger">' + esc(data.error) + '</div>';
+      return;
+    }
+
+    if (!data.rows || data.rows.length === 0) {
+      container.innerHTML = '<div class="alert alert-warning">' + esc(EMPTY_MSG) + '</div>';
+      return;
+    }
+
+    var total   = data.total_count;
+    var rows    = data.rows;   /* already limited to PAGE_LIMIT by server */
+    var dateInfo = HAS_DATE_RANGE ? '（' + esc(data.date_from) + ' 至 ' + esc(data.date_to) + '）' : '';
+
+    /* 下载表单隐藏域 */
+    var hidden = '<input type="hidden" name="keyword" value="' + esc(data.keyword) + '">'
+               + '<input type="hidden" name="search_type" value="' + esc(data.search_type) + '">';
+    if (HAS_DATE_RANGE) {
+      hidden += '<input type="hidden" name="date_from" value="' + esc(data.date_from) + '">'
+              + '<input type="hidden" name="date_to"   value="' + esc(data.date_to)   + '">';
+    }
+
+    var warning = total > PAGE_LIMIT
+      ? '<div class="alert alert-warning" style="margin-bottom:12px;">⚠ 结果超过 ' + PAGE_LIMIT
+        + ' 条，页面仅显示前 ' + PAGE_LIMIT + ' 条记录，完整数据请点击右上角「下载 Excel」。</div>'
+      : '';
+
+    var thHtml = COLUMNS.map(function (c) { return '<th>' + esc(c.label) + '</th>'; }).join('');
+    var tbHtml = rows.map(function (row) {
+      var cells = COLUMNS.map(function (col) {
+        var val   = row[col.key];
+        var style = col.format === 'money' ? ' style="text-align:right;"' : '';
+        return '<td' + style + '>' + fmtCell(col, val) + '</td>';
+      }).join('');
+      return '<tr>' + cells + '</tr>';
+    }).join('');
+
+    container.innerHTML =
+        '<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">'
+      + '  <div class="result-info">共找到 <span>' + total + '</span> 条' + RESULT_LABEL + dateInfo + '</div>'
+      + '  <form method="POST" action="' + DOWNLOAD_URL + '">' + hidden
+      + '    <button type="submit" class="btn btn-success">⬇ 下载 Excel</button>'
+      + '  </form>'
+      + '</div>'
+      + warning
+      + '<div class="table-wrap">'
+      + '  <table id="result-table">'
+      + '    <thead><tr>' + thHtml + '</tr></thead>'
+      + '    <tbody>' + tbHtml + '</tbody>'
+      + '  </table>'
+      + '</div>'
+      + '<div class="pagination" id="pagination"></div>';
+
+    initPagination();
+  }
+
+  /* ── 状态提示 ── */
+  function setStatus(text, color) {
+    var el = document.getElementById('query-status');
+    el.textContent = text;
+    el.style.color = color || '#666';
+    el.style.display = text ? '' : 'none';
+  }
+
+  /* ── 表单提交（AJAX）── */
+  document.getElementById('query-form').addEventListener('submit', function (e) {
+    e.preventDefault();
+
+    var btn = document.getElementById('search-btn');
+    btn.disabled = true;
+    btn.textContent = '🔄 查询中…';
+    setStatus('查询中，请稍候…', '#e67e22');
+
+    var formData = new FormData(this);
+
+    fetch(API_URL, { method: 'POST', body: formData })
+      .then(function (res) {
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        return res.json();
+      })
+      .then(function (data) {
+        /* 缓存到 sessionStorage 供切换页面后恢复 */
+        try { sessionStorage.setItem(CACHE_KEY, JSON.stringify(data)); } catch (cacheErr) {
+          console.warn('sessionStorage write failed:', cacheErr);
+        }
+
+        renderResults(data);
+
+        if (data.error) {
+          setStatus('⚠ 查询失败', '#c0392b');
+        } else {
+          var n = data.total_count;
+          setStatus('✅ 查询完成，共 ' + n + ' 条记录', '#27ae60');
+        }
+      })
+      .catch(function (err) {
+        setStatus('⚠ 请求失败：' + err.message, '#c0392b');
+      })
+      .finally(function () {
+        btn.disabled = false;
+        btn.textContent = '🔍 查询';
+      });
+  });
+
+  /* ── 页面加载：从 sessionStorage 恢复结果（无需再次查询）── */
+  document.addEventListener('DOMContentLoaded', function () {
+    try {
+      var raw = sessionStorage.getItem(CACHE_KEY);
+      if (!raw) return;
+      var data = JSON.parse(raw);
+
+      /* 恢复表单输入值 */
+      var kw = document.getElementById('f-keyword');
+      var st = document.getElementById('f-search-type');
+      if (kw && data.keyword)     kw.value = data.keyword;
+      if (st && data.search_type) st.value = data.search_type;
+      if (HAS_DATE_RANGE) {
+        var df = document.getElementById('f-date-from');
+        var dt = document.getElementById('f-date-to');
+        if (df && data.date_from) df.value = data.date_from;
+        if (dt && data.date_to)   dt.value = data.date_to;
+      }
+
+      /* 渲染缓存的查询结果 */
+      renderResults(data);
+
+      if (!data.error) {
+        setStatus('✅ 查询完成，共 ' + data.total_count + ' 条记录', '#27ae60');
+      }
+    } catch (restoreErr) {
+      console.warn('sessionStorage restore failed:', restoreErr);
+    }
+
+})();
+</script>
 {% endblock %}

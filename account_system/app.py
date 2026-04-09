@@ -13,6 +13,8 @@ SQL 查询语句由 queries/*.sql 文件提供，不在代码中写死。
 """
 
 import atexit
+import datetime
+import decimal
 import io
 import json
 import os
@@ -24,6 +26,7 @@ import pandas as pd
 from flask import (
     Flask,
     g,
+    jsonify,
     render_template,
     request,
     send_file,
@@ -47,6 +50,25 @@ def _get_template_folder() -> str:
 
 app = Flask(__name__, template_folder=_get_template_folder())
 app.secret_key = os.urandom(24)
+
+
+def _json_safe(value):
+    """Convert a single DB value to a JSON-serializable type."""
+    if isinstance(value, decimal.Decimal):
+        return float(value)
+    if isinstance(value, (datetime.date, datetime.datetime)):
+        return str(value)
+    if value is None:
+        return ""
+    return value
+
+
+def _serialize_rows(rows: list) -> list:
+    """Convert DB result rows to JSON-safe dicts."""
+    return [{k: _json_safe(v) for k, v in row.items()} for row in rows]
+
+
+_PAGE_LIMIT = 100  # 单次页面展示的最大行数
 
 
 # ──────────────────────────── 查询配置加载 ────────────────────────────
@@ -171,26 +193,14 @@ def _make_query_view(query_id: str, cfg: dict):
                     error = f"查询失败：{exc}"
 
         else:
-            # GET 请求：若 session 中有上次查询参数，自动恢复并重新执行
+            # GET 请求：从 session 恢复表单输入值（结果由客户端 sessionStorage 恢复）
             saved = session.get(query_id)
             if saved:
                 keyword = saved.get("keyword", "")
                 search_type = saved.get("search_type", default_field)
                 date_from = saved.get("date_from", "")
                 date_to = saved.get("date_to", "")
-                if keyword:
-                    searched = True
-                    field = search_type if search_type in allowlist else default_field
-                    try:
-                        sql = load_query(query_id).format(field=field)
-                        results = query_db(
-                            get_connection(inceptor), sql,
-                            _build_params(cfg, keyword, date_from, date_to),
-                        )
-                    except Exception as exc:
-                        error = f"查询失败：{exc}"
 
-        _PAGE_LIMIT = 100
         total_count = len(results)
         display_results = results[:_PAGE_LIMIT]
 
@@ -250,7 +260,60 @@ def _make_download_view(query_id: str, cfg: dict):
     return download
 
 
-# 遍历所有已加载的查询配置，自动注册查询路由和下载路由
+def _make_api_view(query_id: str, cfg: dict):
+    """为指定查询 ID 生成 AJAX JSON API 路由处理函数（POST）。"""
+    allowlist = {sf["value"] for sf in cfg["search_fields"]}
+    default_field = cfg["search_fields"][0]["value"]
+    inceptor = cfg.get("inceptor", "inceptor")
+
+    def api():
+        keyword = request.form.get("keyword", "").strip()
+        search_type = request.form.get("search_type", default_field)
+        date_from = request.form.get("date_from", "").strip()
+        date_to = request.form.get("date_to", "").strip()
+
+        error = ""
+        if cfg.get("date_range"):
+            if not date_from or not date_to:
+                error = "请填写查询起止日期。"
+            elif date_from > date_to:
+                error = "开始日期不能晚于结束日期。"
+            elif not keyword:
+                error = "请输入关键词。"
+
+        rows = []
+        if not error and keyword:
+            field = search_type if search_type in allowlist else default_field
+            try:
+                sql = load_query(query_id).format(field=field)
+                rows = query_db(
+                    get_connection(inceptor), sql,
+                    _build_params(cfg, keyword, date_from, date_to),
+                )
+                session[query_id] = {
+                    "keyword": keyword,
+                    "search_type": search_type,
+                    "date_from": date_from,
+                    "date_to": date_to,
+                }
+            except Exception as exc:
+                app.logger.error("API query error [%s]: %s", query_id, exc)
+                error = "查询失败，请联系管理员。"
+        return jsonify({
+            "rows": serialized[:_PAGE_LIMIT],
+            "total_count": len(serialized),
+            "keyword": keyword,
+            "search_type": search_type,
+            "date_from": date_from,
+            "date_to": date_to,
+            "error": error,
+        })
+
+    api.__name__ = f"{query_id}_api"
+    return api
+
+
+# 遍历所有已加载的查询配置，自动注册查询路由、下载路由和 API 路由
 for _qid, _cfg in _query_configs.items():
     app.add_url_rule(
         f"/{_qid}",
@@ -262,6 +325,12 @@ for _qid, _cfg in _query_configs.items():
         f"/{_qid}/download",
         endpoint=f"{_qid}_download",
         view_func=_make_download_view(_qid, _cfg),
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        f"/api/{_qid}",
+        endpoint=f"{_qid}_api",
+        view_func=_make_api_view(_qid, _cfg),
         methods=["POST"],
     )
 
