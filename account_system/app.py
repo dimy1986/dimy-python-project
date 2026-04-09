@@ -108,6 +108,13 @@ def index():
 
 def _build_params(cfg: dict, keyword: str, date_from: str, date_to: str) -> tuple:
     """根据查询配置组装 SQL 参数元组。"""
+    pattern = cfg.get("params_pattern")
+    if pattern:
+        if cfg.get("date_format") == "yyyymm":
+            date_from = date_from[:7].replace("-", "")
+            date_to   = date_to[:7].replace("-", "")
+        mapping = {"date_from": date_from, "date_to": date_to, "keyword": keyword}
+        return tuple(mapping[k] for k in pattern)
     if cfg.get("date_range"):
         return (date_from, date_to, f"%{keyword}%")
     return (f"%{keyword}%",)

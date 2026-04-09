@@ -1,0 +1,44 @@
+{
+    "title": "交易查询（pre1126）",
+    "icon": "📋",
+    "description": "按时间范围 + 客户号或账号查询 cdm_td_vchr_seri_hs 交易流水，结果可下载",
+    "sheet_name": "交易查询pre1126",
+    "inceptor": "inceptor",
+    "empty_message": "未查询到符合条件的交易记录，请调整查询条件后重试。",
+    "result_count_label": "交易记录",
+    "keyword_placeholder": "请输入客户号或账号（精确匹配）",
+    "keyword_required": true,
+    "date_range": true,
+    "date_format": "yyyymm",
+    "params_pattern": [
+        "date_from", "date_to", "keyword", "keyword", "keyword",
+        "date_from", "date_to", "keyword", "keyword", "keyword"
+    ],
+    "search_fields": [
+        {"value": "account_no", "label": "按客户号/账号"}
+    ],
+    "columns": [
+        {"key": "交易日期",         "label": "交易日期"},
+        {"key": "交易流水号",       "label": "交易流水号"},
+        {"key": "明细交易流水号",   "label": "明细交易流水号"},
+        {"key": "科目号",           "label": "科目号"},
+        {"key": "机构号",           "label": "机构号"},
+        {"key": "统一客户号",       "label": "统一客户号"},
+        {"key": "借贷标志",         "label": "借贷标志"},
+        {"key": "交易代码",         "label": "交易代码"},
+        {"key": "容器账户号",       "label": "容器账户号"},
+        {"key": "子账号",           "label": "子账号"},
+        {"key": "账户机构",         "label": "账户机构"},
+        {"key": "账户名称",         "label": "账户名称"},
+        {"key": "交易对手主账户",   "label": "交易对手主账户"},
+        {"key": "交易对手方客户号", "label": "交易对手方客户号"},
+        {"key": "交易对手方户名",   "label": "交易对手方户名"},
+        {"key": "交易对手账号",     "label": "交易对手账号"},
+        {"key": "交易对手方机构",   "label": "交易对手方机构"},
+        {"key": "币种",             "label": "币种"},
+        {"key": "交易金额",         "label": "交易金额"},
+        {"key": "本次余额",         "label": "本次余额"},
+        {"key": "交易时间",         "label": "交易时间"},
+        {"key": "交易摘要",         "label": "交易摘要"}
+    ]
+}
