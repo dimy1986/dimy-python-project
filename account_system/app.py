@@ -299,6 +299,7 @@ def _make_api_view(query_id: str, cfg: dict):
             except Exception as exc:
                 app.logger.error("API query error [%s]: %s", query_id, exc)
                 error = "查询失败，请联系管理员。"
+        serialized = _serialize_rows(rows)
         return jsonify({
             "rows": serialized[:_PAGE_LIMIT],
             "total_count": len(serialized),
