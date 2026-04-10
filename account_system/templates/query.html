@@ -4,7 +4,7 @@
 {% block content %}
 <div class="card">
   <div class="card-title">{{ cfg.title }}</div>
-  <form id="query-form">
+  <form id="query-form" onsubmit="return false;">
     {% if cfg.date_range %}
     <div class="form-row" style="margin-bottom:14px;">
       <div class="form-group">
@@ -243,34 +243,34 @@
       });
   });
 
-  /* ── 页面加载：从 sessionStorage 恢复结果（无需再次查询）── */
-  document.addEventListener('DOMContentLoaded', function () {
-    try {
-      var raw = sessionStorage.getItem(CACHE_KEY);
-      if (!raw) return;
-      var data = JSON.parse(raw);
+  /* ── 页面加载：从 sessionStorage 同步恢复结果（脚本在页面底部，DOM 已就绪）── */
+  try {
+    var _raw = sessionStorage.getItem(CACHE_KEY);
+    if (_raw) {
+      var _cached = JSON.parse(_raw);
 
       /* 恢复表单输入值 */
-      var kw = document.getElementById('f-keyword');
-      var st = document.getElementById('f-search-type');
-      if (kw && data.keyword)     kw.value = data.keyword;
-      if (st && data.search_type) st.value = data.search_type;
+      var _kw = document.getElementById('f-keyword');
+      var _st = document.getElementById('f-search-type');
+      if (_kw && _cached.keyword)     _kw.value = _cached.keyword;
+      if (_st && _cached.search_type) _st.value = _cached.search_type;
       if (HAS_DATE_RANGE) {
-        var df = document.getElementById('f-date-from');
-        var dt = document.getElementById('f-date-to');
-        if (df && data.date_from) df.value = data.date_from;
-        if (dt && data.date_to)   dt.value = data.date_to;
+        var _df = document.getElementById('f-date-from');
+        var _dt = document.getElementById('f-date-to');
+        if (_df && _cached.date_from) _df.value = _cached.date_from;
+        if (_dt && _cached.date_to)   _dt.value = _cached.date_to;
       }
 
       /* 渲染缓存的查询结果 */
-      renderResults(data);
+      renderResults(_cached);
 
-      if (!data.error) {
-        setStatus('✅ 查询完成，共 ' + data.total_count + ' 条记录', '#27ae60');
+      if (!_cached.error) {
+        setStatus('✅ 查询完成，共 ' + _cached.total_count + ' 条记录', '#27ae60');
       }
-    } catch (restoreErr) {
-      console.warn('sessionStorage restore failed:', restoreErr);
     }
+  } catch (restoreErr) {
+    console.warn('sessionStorage restore failed:', restoreErr);
+  }
 
 })();
 </script>
