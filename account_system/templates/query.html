@@ -203,16 +203,37 @@
     el.style.display = text ? '' : 'none';
   }
 
-  /* ── 表单提交（AJAX）── */
-  document.getElementById('query-form').addEventListener('submit', function (e) {
-    e.preventDefault();
+  /* ── 将表单当前值写入 sessionStorage（可带 pending 标志）── */
+  function saveFormToCache(pending) {
+    var kw = document.getElementById('f-keyword');
+    var st = document.getElementById('f-search-type');
+    var entry = {
+      keyword:     kw ? kw.value : '',
+      search_type: st ? st.value : '',
+      pending:     !!pending
+    };
+    if (HAS_DATE_RANGE) {
+      var df = document.getElementById('f-date-from');
+      var dt = document.getElementById('f-date-to');
+      entry.date_from = df ? df.value : '';
+      entry.date_to   = dt ? dt.value : '';
+    }
+    try { sessionStorage.setItem(CACHE_KEY, JSON.stringify(entry)); } catch (e) {
+      console.warn('sessionStorage write failed:', e);
+    }
+  }
 
+  /* ── 发起 AJAX 查询 ── */
+  function doQuery() {
     var btn = document.getElementById('search-btn');
     btn.disabled = true;
     btn.textContent = '🔄 查询中…';
     setStatus('查询中，请稍候…', '#e67e22');
 
-    var formData = new FormData(this);
+    /* 立即保存表单参数，pending=true；防止查询期间切换页面后参数丢失 */
+    saveFormToCache(true);
+
+    var formData = new FormData(document.getElementById('query-form'));
 
     fetch(API_URL, { method: 'POST', body: formData })
       .then(function (res) {
@@ -220,7 +241,7 @@
         return res.json();
       })
       .then(function (data) {
-        /* 缓存到 sessionStorage 供切换页面后恢复 */
+        /* 查询成功，缓存完整结果，pending=false */
         try { sessionStorage.setItem(CACHE_KEY, JSON.stringify(data)); } catch (cacheErr) {
           console.warn('sessionStorage write failed:', cacheErr);
         }
@@ -241,6 +262,12 @@
         btn.disabled = false;
         btn.textContent = '🔍 查询';
       });
+  }
+
+  /* ── 表单提交（AJAX）── */
+  document.getElementById('query-form').addEventListener('submit', function (e) {
+    e.preventDefault();
+    doQuery();
   });
 
   /* ── 页面加载：从 sessionStorage 同步恢复结果（脚本在页面底部，DOM 已就绪）── */
@@ -261,11 +288,15 @@
         if (_dt && _cached.date_to)   _dt.value = _cached.date_to;
       }
 
-      /* 渲染缓存的查询结果 */
-      renderResults(_cached);
-
-      if (!_cached.error) {
-        setStatus('✅ 查询完成，共 ' + _cached.total_count + ' 条记录', '#27ae60');
+      if (_cached.pending) {
+        /* 上次查询在进行中时切换了页面，自动重新发起查询 */
+        doQuery();
+      } else {
+        /* 渲染缓存的查询结果 */
+        renderResults(_cached);
+        if (!_cached.error) {
+          setStatus('✅ 查询完成，共 ' + _cached.total_count + ' 条记录', '#27ae60');
+        }
       }
     }
   } catch (restoreErr) {
