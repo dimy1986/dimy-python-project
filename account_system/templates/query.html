@@ -270,38 +270,54 @@
     doQuery();
   });
 
-  /* ── 页面加载：从 sessionStorage 同步恢复结果（脚本在页面底部，DOM 已就绪）── */
-  try {
-    var _raw = sessionStorage.getItem(CACHE_KEY);
-    if (_raw) {
-      var _cached = JSON.parse(_raw);
+  /* ── 从 sessionStorage 恢复表单与结果（初次加载 + bfcache 恢复均调用）── */
+  function restoreFromCache() {
+    try {
+      var raw = sessionStorage.getItem(CACHE_KEY);
+      if (!raw) return;
+      var cached = JSON.parse(raw);
 
       /* 恢复表单输入值 */
-      var _kw = document.getElementById('f-keyword');
-      var _st = document.getElementById('f-search-type');
-      if (_kw && _cached.keyword)     _kw.value = _cached.keyword;
-      if (_st && _cached.search_type) _st.value = _cached.search_type;
+      var kw = document.getElementById('f-keyword');
+      var st = document.getElementById('f-search-type');
+      if (kw && cached.keyword)     kw.value = cached.keyword;
+      if (st && cached.search_type) st.value = cached.search_type;
       if (HAS_DATE_RANGE) {
-        var _df = document.getElementById('f-date-from');
-        var _dt = document.getElementById('f-date-to');
-        if (_df && _cached.date_from) _df.value = _cached.date_from;
-        if (_dt && _cached.date_to)   _dt.value = _cached.date_to;
+        var df = document.getElementById('f-date-from');
+        var dt = document.getElementById('f-date-to');
+        if (df && cached.date_from) df.value = cached.date_from;
+        if (dt && cached.date_to)   dt.value = cached.date_to;
       }
 
-      if (_cached.pending) {
-        /* 上次查询在进行中时切换了页面，自动重新发起查询 */
+      if (cached.pending) {
+        /* 上次查询在进行中时离开了页面（含 bfcache 恢复场景）
+           重置按钮状态（bfcache 下按钮可能仍处于禁用态），然后重新发起查询 */
+        var btn = document.getElementById('search-btn');
+        btn.disabled = false;
+        btn.textContent = '🔍 查询';
+        setStatus('', '');
         doQuery();
       } else {
         /* 渲染缓存的查询结果 */
-        renderResults(_cached);
-        if (!_cached.error) {
-          setStatus('✅ 查询完成，共 ' + _cached.total_count + ' 条记录', '#27ae60');
+        renderResults(cached);
+        if (!cached.error) {
+          setStatus('✅ 查询完成，共 ' + cached.total_count + ' 条记录', '#27ae60');
         }
       }
+    } catch (restoreErr) {
+      console.warn('sessionStorage restore failed:', restoreErr);
     }
-  } catch (restoreErr) {
-    console.warn('sessionStorage restore failed:', restoreErr);
   }
+
+  /* 初次加载时恢复 */
+  restoreFromCache();
+
+  /* bfcache 恢复（浏览器前进/后退键）时重新触发，避免 fetch 被丢弃后页面卡住 */
+  window.addEventListener('pageshow', function (evt) {
+    if (evt.persisted) {
+      restoreFromCache();
+    }
+  });
 
 })();
 </script>
