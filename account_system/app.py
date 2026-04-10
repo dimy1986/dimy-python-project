@@ -15,14 +15,14 @@ SQL 查询语句由 queries/*.sql 文件提供，不在代码中写死。
 import atexit
 import datetime
 import decimal
-import io
 import json
 import os
 import sys
+import tempfile
 import threading
 import webbrowser
 
-import pandas as pd
+import xlsxwriter
 from flask import (
     Flask,
     g,
@@ -42,6 +42,7 @@ from database import (
     get_db,
     get_queries_dir,
     init_users_db,
+    iter_query_db,
     list_users,
     load_query,
     query_db,
@@ -350,7 +351,11 @@ def _make_query_view(query_id: str, cfg: dict):
 
 
 def _make_download_view(query_id: str, cfg: dict):
-    """为指定查询 ID 生成 Excel 下载路由处理函数。"""
+    """为指定查询 ID 生成 Excel 下载路由处理函数。
+
+    使用 xlsxwriter constant_memory 模式 + 磁盘临时文件流式写入，
+    避免几十万行数据一次性载入内存或缓存在 BytesIO 中导致 OOM / 卡死。
+    """
     allowlist = {sf["value"] for sf in cfg["search_fields"]}
     default_field = cfg["search_fields"][0]["value"]
     inceptor = cfg.get("inceptor", "inceptor")
@@ -363,24 +368,59 @@ def _make_download_view(query_id: str, cfg: dict):
 
         field = search_type if search_type in allowlist else default_field
         sql = load_query(query_id).format(field=field)
-        rows = query_db(
-            get_connection(inceptor), sql,
-            _build_params(cfg, keyword, date_from, date_to),
-        )
 
-        df = pd.DataFrame(rows)
         sheet = cfg.get("sheet_name", "查询结果")
-        output = io.BytesIO()
-        with pd.ExcelWriter(output, engine="openpyxl") as writer:
-            df.to_excel(writer, index=False, sheet_name=sheet)
-        output.seek(0)
 
-        return send_file(
-            output,
-            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            as_attachment=True,
-            download_name=f"{sheet}.xlsx",
-        )
+        # 写到磁盘临时文件，避免整个 workbook 缓存在内存中
+        tmp = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False)
+        tmp_path = tmp.name
+        tmp.close()
+
+        try:
+            workbook = xlsxwriter.Workbook(tmp_path, {"constant_memory": True})
+            worksheet = workbook.add_worksheet(sheet[:31])  # Excel 表名最长 31 字符
+
+            headers_written = False
+            row_idx = 0
+            for record in iter_query_db(
+                get_connection(inceptor), sql,
+                _build_params(cfg, keyword, date_from, date_to),
+            ):
+                if not headers_written:
+                    for col_idx, key in enumerate(record.keys()):
+                        worksheet.write(0, col_idx, key)
+                    headers_written = True
+                    row_idx = 1
+
+                for col_idx, value in enumerate(record.values()):
+                    v = _json_safe(value)
+                    worksheet.write(row_idx, col_idx, v)
+                row_idx += 1
+
+            workbook.close()
+
+            response = send_file(
+                tmp_path,
+                mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                as_attachment=True,
+                download_name=f"{sheet}.xlsx",
+            )
+
+            @response.call_on_close
+            def _cleanup():
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+
+            return response
+
+        except Exception:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
 
     download.__name__ = f"{query_id}_download"
     return download

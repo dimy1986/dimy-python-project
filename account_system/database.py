@@ -12,7 +12,7 @@ import os
 import re
 import sqlite3
 import sys
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Generator, List, Optional
 
 from pyhive import hive
 from sshtunnel import SSHTunnelForwarder
@@ -380,4 +380,44 @@ def query_db(
     columns = [desc[0].split(".")[-1] for desc in cursor.description]
     rows = cursor.fetchall()
     return [dict(zip(columns, row)) for row in rows]
+
+
+def iter_query_db(
+    conn: hive.Connection,
+    sql: str,
+    params: tuple = (),
+    chunk_size: int = 2000,
+) -> Generator[Dict[str, Any], None, None]:
+    """
+    执行参数化 SQL，以生成器方式按块（chunk_size 行）返回结果字典。
+
+    与 query_db 共享相同的 SQL 预处理逻辑（注释清理、占位符转义）。
+    使用 cursor.fetchmany() 分批拉取数据，每次仅将 chunk_size 行保留在内存中，
+    适合几十万行级别的大数据量 Excel 导出场景。
+
+    :param conn:       Hive 连接对象
+    :param sql:        SQL 语句（%s 为 pyhive 参数占位符）
+    :param params:     对应 SQL 中每个 %s 的参数元组
+    :param chunk_size: 每次 fetchmany 拉取的行数，默认 2000
+    :yields:           每行数据字典
+    """
+    cursor = conn.cursor()
+    sql_exec = re.sub(r"--[^\n]*", "", sql)
+    if params:
+        _PLACEHOLDER = "\x00__PYHIVE_PARAM__\x00"
+        sql_exec = (
+            sql_exec.replace("%s", _PLACEHOLDER)
+                    .replace("%", "%%")
+                    .replace(_PLACEHOLDER, "%s")
+        )
+    cursor.execute(sql_exec, params if params else None)
+    if not cursor.description:
+        return
+    columns = [desc[0].split(".")[-1] for desc in cursor.description]
+    while True:
+        batch = cursor.fetchmany(chunk_size)
+        if not batch:
+            break
+        for row in batch:
+            yield dict(zip(columns, row))
 
