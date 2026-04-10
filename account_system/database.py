@@ -39,6 +39,19 @@ def get_queries_dir() -> str:
     return _get_queries_dir()
 
 
+def load_auth_config() -> tuple:
+    """
+    从 config.ini 的 [auth] 节读取登录凭据，返回 (username, password)。
+    若 [auth] 节不存在则返回 (None, None)，由调用方决定是否启用认证。
+    """
+    cfg = _load_config()
+    if not cfg.has_section("auth"):
+        return (None, None)
+    username = cfg.get("auth", "username", fallback=None)
+    password = cfg.get("auth", "password", fallback=None)
+    return (username, password)
+
+
 def _get_queries_dir() -> str:
     """
     返回 SQL 查询文件目录：

@@ -32,6 +32,27 @@
       transition: background .2s;
     }
     nav a:hover, nav a.active { background: rgba(255,255,255,.2); color: #fff; }
+    .header-right {
+      margin-left: auto;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-size: 13px;
+      color: rgba(255,255,255,.8);
+    }
+    .btn-logout {
+      background: rgba(255,255,255,.15);
+      border: 1px solid rgba(255,255,255,.35);
+      color: #fff;
+      padding: 4px 14px;
+      border-radius: 4px;
+      font-size: 13px;
+      cursor: pointer;
+      text-decoration: none;
+      transition: background .2s;
+      font-family: inherit;
+    }
+    .btn-logout:hover { background: rgba(255,255,255,.28); }
     /* ── 内容区 ── */
     .container { max-width: 1200px; margin: 28px auto; padding: 0 20px; }
     /* ── 卡片 ── */
@@ -182,6 +203,12 @@
        {% if request.endpoint == qid %}class="active"{% endif %}>{{ qcfg.title }}</a>
     {% endfor %}
   </nav>
+  {% if session.get('logged_in') %}
+  <div class="header-right">
+    <span>👤 {{ session.get('username', '') }}</span>
+    <a href="{{ url_for('logout') }}" class="btn-logout">退出登录</a>
+  </div>
+  {% endif %}
 </header>
 
 <div class="container">

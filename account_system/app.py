@@ -27,13 +27,15 @@ from flask import (
     Flask,
     g,
     jsonify,
+    redirect,
     render_template,
     request,
     send_file,
     session,
+    url_for,
 )
 
-from database import get_db, get_queries_dir, load_query, query_db, start_tunnel, stop_tunnel
+from database import get_db, get_queries_dir, load_auth_config, load_query, query_db, start_tunnel, stop_tunnel
 
 
 def _get_template_folder() -> str:
@@ -119,6 +121,50 @@ def close_connection(exception):
     if connections:
         for db in connections.values():
             db.close()
+
+
+# ──────────────────────────── 用户认证 ────────────────────────────
+
+# 启动时读取一次凭据（若 config.ini 不存在或无 [auth] 节则禁用认证）
+try:
+    _AUTH_USER, _AUTH_PASS = load_auth_config()
+except Exception:
+    _AUTH_USER, _AUTH_PASS = None, None
+
+_AUTH_ENABLED = bool(_AUTH_USER and _AUTH_PASS)
+
+
+@app.before_request
+def _require_login():
+    """所有路由（除登录页和静态资源外）必须先登录。"""
+    if not _AUTH_ENABLED:
+        return
+    if request.endpoint in ("login", "logout", "static"):
+        return
+    if not session.get("logged_in"):
+        return redirect(url_for("login", next=request.path))
+
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    error = ""
+    if request.method == "POST":
+        username = request.form.get("username", "").strip()
+        password = request.form.get("password", "")
+        if username == _AUTH_USER and password == _AUTH_PASS:
+            session["logged_in"] = True
+            session["username"] = username
+            next_url = request.form.get("next") or url_for("index")
+            return redirect(next_url)
+        error = "用户名或密码错误，请重试。"
+    return render_template("login.html", error=error,
+                           next=request.args.get("next", ""))
+
+
+@app.route("/logout")
+def logout():
+    session.clear()
+    return redirect(url_for("login"))
 
 
 # ──────────────────────────── 首页 ────────────────────────────
