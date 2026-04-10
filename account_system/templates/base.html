@@ -206,6 +206,7 @@
   {% if session.get('logged_in') %}
   <div class="header-right">
     <span>👤 {{ session.get('username', '') }}</span>
+    <a href="{{ url_for('admin_users') }}" class="btn-logout">用户管理</a>
     <a href="{{ url_for('logout') }}" class="btn-logout">退出登录</a>
   </div>
   {% endif %}

@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+{% block title %}用户管理 — 账户与交易查询系统{% endblock %}
+
+{% block content %}
+<div class="card">
+  <div class="card-title">👥 用户管理</div>
+
+  {% if error %}
+  <div class="alert alert-danger">{{ error }}</div>
+  {% endif %}
+
+  {% if pw_changed %}
+  <div class="alert" style="background:#e8f5e9;color:#27ae60;border-left:4px solid #28a745;">
+    用户 <strong>{{ pw_changed }}</strong> 的密码已修改成功。
+  </div>
+  {% endif %}
+
+  <!-- 新增用户 -->
+  <h3 style="font-size:15px;color:#1a478a;margin-bottom:14px;">新增用户</h3>
+  <form method="POST" action="{{ url_for('admin_users_add') }}">
+    <div class="form-row" style="align-items:flex-end;margin-bottom:20px;">
+      <div class="form-group">
+        <label>用户名</label>
+        <input type="text" name="username" placeholder="请输入用户名" required
+               style="height:36px;border:1px solid #d0d7e3;border-radius:4px;padding:7px 11px;font-size:14px;outline:none;">
+      </div>
+      <div class="form-group">
+        <label>密码</label>
+        <input type="password" name="password" placeholder="请输入密码" required
+               style="height:36px;border:1px solid #d0d7e3;border-radius:4px;padding:7px 11px;font-size:14px;outline:none;">
+      </div>
+      <div class="form-group" style="justify-content:center;flex-direction:row;gap:6px;align-items:center;">
+        <input type="checkbox" id="is_admin" name="is_admin" value="1"
+               style="width:16px;height:16px;cursor:pointer;">
+        <label for="is_admin" style="font-size:13px;color:#666;cursor:pointer;">管理员</label>
+      </div>
+      <button type="submit" class="btn btn-primary">新增用户</button>
+    </div>
+  </form>
+
+  <!-- 用户列表 -->
+  <h3 style="font-size:15px;color:#1a478a;margin-bottom:14px;">现有用户</h3>
+  {% if users %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>用户名</th>
+          <th>角色</th>
+          <th>创建时间</th>
+          <th>修改密码</th>
+          <th>操作</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for u in users %}
+        <tr>
+          <td>{{ u.id }}</td>
+          <td>{{ u.username }}</td>
+          <td>
+            {% if u.is_admin %}
+            <span class="badge badge-normal">管理员</span>
+            {% else %}
+            <span class="badge" style="background:#f0f2f5;color:#666;">普通用户</span>
+            {% endif %}
+          </td>
+          <td>{{ u.created_at }}</td>
+          <td>
+            <form method="POST" action="{{ url_for('admin_change_password') }}"
+                  style="display:flex;gap:6px;align-items:center;">
+              <input type="hidden" name="username" value="{{ u.username }}">
+              <input type="password" name="new_password" placeholder="新密码" required
+                     style="height:30px;border:1px solid #d0d7e3;border-radius:4px;
+                            padding:4px 8px;font-size:13px;outline:none;width:130px;">
+              <button type="submit" class="btn btn-primary"
+                      style="height:30px;padding:0 12px;font-size:13px;">修改</button>
+            </form>
+          </td>
+          <td>
+            {% if u.username != session.get('username') %}
+            <form method="POST" action="{{ url_for('admin_users_delete') }}"
+                  onsubmit="return confirm('确认删除用户 {{ u.username }}？')">
+              <input type="hidden" name="username" value="{{ u.username }}">
+              <button type="submit" class="btn"
+                      style="height:30px;padding:0 12px;font-size:13px;
+                             background:#e74c3c;color:#fff;">删除</button>
+            </form>
+            {% else %}
+            <span style="font-size:12px;color:#aaa;">（当前用户）</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p style="color:#888;font-size:14px;">暂无用户，请先新增一个用户。</p>
+  {% endif %}
+</div>
+{% endblock %}

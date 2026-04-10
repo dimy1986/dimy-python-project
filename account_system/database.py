@@ -10,11 +10,13 @@ SQL 查询语句从外部 queries/*.sql 文件加载，不在代码中写死。
 import configparser
 import os
 import re
+import sqlite3
 import sys
 from typing import Any, Dict, List, Optional
 
 from pyhive import hive
 from sshtunnel import SSHTunnelForwarder
+from werkzeug.security import check_password_hash, generate_password_hash
 
 
 # ──────────────────────────── 路径解析 ────────────────────────────
@@ -50,6 +52,123 @@ def load_auth_config() -> tuple:
     username = cfg.get("auth", "username", fallback=None)
     password = cfg.get("auth", "password", fallback=None)
     return (username, password)
+
+
+# ──────────────────────────── 用户数据库（多用户认证）────────────────────────────
+
+def _get_users_db_path() -> str:
+    """返回存储登录用户的 SQLite 数据库路径（与 config.ini 同目录）。"""
+    return os.path.join(_base_dir(), "users.db")
+
+
+def _users_db_conn() -> sqlite3.Connection:
+    """打开并返回用户数据库连接（行工厂为 sqlite3.Row）。"""
+    conn = sqlite3.connect(_get_users_db_path())
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def init_users_db(migrate_from_config: bool = True) -> None:
+    """
+    初始化用户表（若不存在则创建）。
+    若 migrate_from_config=True 且表中尚无用户，自动将 config.ini [auth] 节中的
+    凭据迁移到数据库（密码以 Werkzeug pbkdf2 哈希存储）。
+    """
+    with _users_db_conn() as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS users (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                username      TEXT NOT NULL UNIQUE,
+                password_hash TEXT NOT NULL,
+                is_admin      INTEGER NOT NULL DEFAULT 0,
+                created_at    TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+            )
+            """
+        )
+        conn.commit()
+
+        if not migrate_from_config:
+            return
+
+        row = conn.execute("SELECT COUNT(*) FROM users").fetchone()
+        if row[0] > 0:
+            return
+
+    # 表为空时，尝试从 config.ini 迁移
+    try:
+        legacy_user, legacy_pass = load_auth_config()
+    except Exception:
+        legacy_user, legacy_pass = None, None
+
+    if legacy_user and legacy_pass:
+        add_user(legacy_user, legacy_pass, is_admin=True)
+
+
+def verify_user(username: str, password: str) -> bool:
+    """
+    验证用户名和密码，返回 True 表示认证通过。
+    使用 Werkzeug 安全哈希比较，防止时序攻击。
+    """
+    with _users_db_conn() as conn:
+        row = conn.execute(
+            "SELECT password_hash FROM users WHERE username = ?", (username,)
+        ).fetchone()
+    if row is None:
+        return False
+    return check_password_hash(row["password_hash"], password)
+
+
+def add_user(username: str, password: str, is_admin: bool = False) -> None:
+    """
+    新增用户，密码以 Werkzeug pbkdf2_sha256 哈希存储。
+
+    :raises ValueError: 若用户名已存在
+    """
+    hashed = generate_password_hash(password)
+    try:
+        with _users_db_conn() as conn:
+            conn.execute(
+                "INSERT INTO users (username, password_hash, is_admin) VALUES (?, ?, ?)",
+                (username, hashed, 1 if is_admin else 0),
+            )
+            conn.commit()
+    except sqlite3.IntegrityError:
+        raise ValueError(f"用户名 '{username}' 已存在")
+
+
+def list_users() -> List[Dict[str, Any]]:
+    """返回所有用户列表（不含密码哈希）。"""
+    with _users_db_conn() as conn:
+        rows = conn.execute(
+            "SELECT id, username, is_admin, created_at FROM users ORDER BY id"
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def delete_user(username: str) -> None:
+    """删除指定用户。"""
+    with _users_db_conn() as conn:
+        conn.execute("DELETE FROM users WHERE username = ?", (username,))
+        conn.commit()
+
+
+def change_password(username: str, new_password: str) -> None:
+    """修改指定用户的密码。"""
+    hashed = generate_password_hash(new_password)
+    with _users_db_conn() as conn:
+        conn.execute(
+            "UPDATE users SET password_hash = ? WHERE username = ?",
+            (hashed, username),
+        )
+        conn.commit()
+
+
+def user_count() -> int:
+    """返回当前用户总数（用于判断是否启用认证）。"""
+    with _users_db_conn() as conn:
+        row = conn.execute("SELECT COUNT(*) FROM users").fetchone()
+    return row[0]
 
 
 def _get_queries_dir() -> str:

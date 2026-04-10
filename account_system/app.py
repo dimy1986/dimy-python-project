@@ -35,7 +35,21 @@ from flask import (
     url_for,
 )
 
-from database import get_db, get_queries_dir, load_auth_config, load_query, query_db, start_tunnel, stop_tunnel
+from database import (
+    add_user,
+    change_password,
+    delete_user,
+    get_db,
+    get_queries_dir,
+    init_users_db,
+    list_users,
+    load_query,
+    query_db,
+    start_tunnel,
+    stop_tunnel,
+    user_count,
+    verify_user,
+)
 
 
 def _get_template_folder() -> str:
@@ -125,19 +139,25 @@ def close_connection(exception):
 
 # ──────────────────────────── 用户认证 ────────────────────────────
 
-# 启动时读取一次凭据（若 config.ini 不存在或无 [auth] 节则禁用认证）
+# 启动时初始化用户数据库，自动从 config.ini [auth] 迁移历史用户（如有）
 try:
-    _AUTH_USER, _AUTH_PASS = load_auth_config()
-except Exception:
-    _AUTH_USER, _AUTH_PASS = None, None
+    init_users_db(migrate_from_config=True)
+except Exception as _e:
+    print(f"[警告] 用户数据库初始化失败: {_e}")
 
-_AUTH_ENABLED = bool(_AUTH_USER and _AUTH_PASS)
+
+def _auth_enabled() -> bool:
+    """当用户数据库中存在至少一个用户时启用认证。"""
+    try:
+        return user_count() > 0
+    except Exception:
+        return False
 
 
 @app.before_request
 def _require_login():
-    """所有路由（除登录页和静态资源外）必须先登录。"""
-    if not _AUTH_ENABLED:
+    """所有路由（除登录页、登出页和静态资源外）必须先登录。"""
+    if not _auth_enabled():
         return
     if request.endpoint in ("login", "logout", "static"):
         return
@@ -151,10 +171,18 @@ def login():
     if request.method == "POST":
         username = request.form.get("username", "").strip()
         password = request.form.get("password", "")
-        if username == _AUTH_USER and password == _AUTH_PASS:
+        if verify_user(username, password):
             session["logged_in"] = True
             session["username"] = username
-            next_url = request.form.get("next") or url_for("index")
+            # 只允许跳转到本站内部路径，防止开放重定向攻击
+            raw_next = request.form.get("next", "")
+            from urllib.parse import urlparse
+            parsed = urlparse(raw_next)
+            # 仅接受相对路径（无 scheme 和 netloc）
+            if raw_next and not parsed.scheme and not parsed.netloc:
+                next_url = raw_next
+            else:
+                next_url = url_for("index")
             return redirect(next_url)
         error = "用户名或密码错误，请重试。"
     return render_template("login.html", error=error,
@@ -165,6 +193,58 @@ def login():
 def logout():
     session.clear()
     return redirect(url_for("login"))
+
+
+# ──────────────────────────── 用户管理（管理员）────────────────────────────
+
+@app.route("/admin/users")
+def admin_users():
+    users = list_users()
+    return render_template("admin_users.html", users=users)
+
+
+@app.route("/admin/users/add", methods=["POST"])
+def admin_users_add():
+    username = request.form.get("username", "").strip()
+    password = request.form.get("password", "")
+    is_admin = bool(request.form.get("is_admin"))
+    error = ""
+    if not username or not password:
+        error = "用户名和密码不能为空。"
+    else:
+        try:
+            add_user(username, password, is_admin=is_admin)
+        except ValueError as exc:
+            error = str(exc)
+    users = list_users()
+    return render_template("admin_users.html", users=users, error=error)
+
+
+@app.route("/admin/users/delete", methods=["POST"])
+def admin_users_delete():
+    username = request.form.get("username", "").strip()
+    current = session.get("username", "")
+    error = ""
+    if username == current:
+        error = "不能删除当前登录的用户。"
+    elif username:
+        delete_user(username)
+    users = list_users()
+    return render_template("admin_users.html", users=users, error=error)
+
+
+@app.route("/admin/users/change_password", methods=["POST"])
+def admin_change_password():
+    username = request.form.get("username", "").strip()
+    new_password = request.form.get("new_password", "")
+    error = ""
+    if not username or not new_password:
+        error = "用户名和新密码不能为空。"
+    else:
+        change_password(username, new_password)
+    users = list_users()
+    return render_template("admin_users.html", users=users, error=error,
+                           pw_changed=username if not error else "")
 
 
 # ──────────────────────────── 首页 ────────────────────────────
