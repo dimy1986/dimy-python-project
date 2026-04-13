@@ -44,6 +44,12 @@ a = Analysis(
         "sasl",
         # database module
         "database",
+        # 系统托盘图标
+        "pystray",
+        "pystray._win32",
+        "PIL",
+        "PIL.Image",
+        "PIL.ImageDraw",
     ],
     hookspath=[],
     hooksconfig={},
@@ -51,7 +57,6 @@ a = Analysis(
     excludes=[
         # Exclude heavy packages not needed at runtime
         "matplotlib",
-        "PIL",
         "cv2",
         "paddleocr",
         "paddle",
@@ -82,7 +87,7 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
-    console=True,       # 保留控制台窗口，方便查看运行日志；如不需要可改为 False
+    console=False,      # 隐藏控制台窗口，程序改由系统托盘图标驻留
     disable_windowed_traceback=False,
     target_arch=None,
     codesign_identity=None,

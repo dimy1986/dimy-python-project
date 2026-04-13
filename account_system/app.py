@@ -519,16 +519,58 @@ if __name__ == "__main__":
     port = 5000
     url = f"http://localhost:{port}"
 
+    # 在后台守护线程中启动 Flask（主线程留给托盘图标）
+    flask_thread = threading.Thread(
+        target=lambda: app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False),
+        daemon=True,
+    )
+    flask_thread.start()
+
     # 延迟 1.2 秒后自动打开默认浏览器（给 Flask 启动时间）
     def _open_browser():
         import time
         time.sleep(1.2)
         webbrowser.open(url)
 
-    browser_thread = threading.Thread(target=_open_browser, daemon=True)
-    browser_thread.start()
+    threading.Thread(target=_open_browser, daemon=True).start()
 
-    print(f"启动成功，请在浏览器访问: {url}")
-    print("按 Ctrl+C 退出程序")
-    # host="0.0.0.0" 使局域网内其他机器也能访问
-    app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
+    # 尝试以系统托盘图标形式运行（打包 exe 时隐藏到右下角通知区域）
+    try:
+        import pystray
+        from PIL import Image, ImageDraw
+
+        def _make_tray_image():
+            """创建一个简单的蓝色正方形托盘图标。"""
+            size = 64
+            img = Image.new("RGB", (size, size), "#1a478a")
+            draw = ImageDraw.Draw(img)
+            # 中心白色小方块，模拟"查"字
+            m = size // 4
+            draw.rectangle([m, m, size - m, size - m], fill="white")
+            return img
+
+        def _on_open_browser(icon, item):
+            webbrowser.open(url)
+
+        def _on_quit(icon, item):
+            icon.stop()
+            stop_tunnel()
+            os._exit(0)
+
+        tray_menu = pystray.Menu(
+            pystray.MenuItem("打开浏览器", _on_open_browser, default=True),
+            pystray.MenuItem("退出", _on_quit),
+        )
+        tray_icon = pystray.Icon(
+            "query_system",
+            _make_tray_image(),
+            "账户与交易查询系统",
+            tray_menu,
+        )
+        # 阻塞运行托盘，直到用户通过菜单「退出」
+        tray_icon.run()
+    except ImportError:
+        # pystray 不可用时（纯命令行/开发环境），保持阻塞直到手动终止
+        print(f"启动成功，请在浏览器访问: {url}")
+        print("按 Ctrl+C 退出程序")
+        flask_thread.join()
