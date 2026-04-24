@@ -1,0 +1,42 @@
+{
+    "title": "对公客户信息查询",
+    "icon": "👤",
+    "description": "按客户编号或户名检索账户基本信息，支持模糊匹配，结果可下载",
+    "sheet_name": "账户查询结果",
+    "inceptor": "inceptor",
+    "empty_message": "未查询到符合条件的账户，请检查关键词后重试。",
+    "result_count_label": "账户记录",
+    "keyword_placeholder": "请输入客户编号或户名",
+    "keyword_required": false,
+    "date_range": false,
+    "search_fields": [
+        {"value": "b.cst_id",   "label": "按客户编号"},
+		{"value": "bb.cst_accno",   "label": "按客户账号"},
+        {"value": "chn_nm", "label": "按客户名"}
+    ],
+    "columns": [
+        {"key": "统一客户编号",    "label": "统一客户编号"},
+{"key": "中文名称",    "label": "中文名称"},
+{"key": "客户开户日期",    "label": "客户开户日期"},
+{"key": "开户机构",    "label": "开户机构"},
+{"key": "开户机构名称",    "label": "开户机构名称"},
+{"key": "客户状态",    "label": "客户状态"},
+{"key": "客户状态描述",    "label": "客户状态描述"},
+{"key": "客户评级",    "label": "客户评级"},
+{"key": "行政区划",    "label": "行政区划"},
+{"key": "行政区划描述",    "label": "行政区划描述"},
+{"key": "客户账号",    "label": "客户账号"},
+{"key": "账户名称",    "label": "账户名称"},
+{"key": "账号开户日期",    "label": "账号开户日期"},
+{"key": "账户机构",    "label": "账户机构"},
+{"key": "账户机构名称",    "label": "账户机构名称"},
+{"key": "账户类型",    "label": "账户类型"},
+{"key": "账户类型描述",    "label": "账户类型描述"},
+{"key": "账户状态",    "label": "账户状态"},
+{"key": "账户状态描述",    "label": "账户状态描述"},
+{"key": "账户性质",    "label": "账户性质"},
+{"key": "账户性质描述",    "label": "账户性质描述"}
+
+        
+    ]
+}

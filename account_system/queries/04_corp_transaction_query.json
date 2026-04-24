@@ -1,0 +1,44 @@
+{
+    "title": "对公交易信息查询",
+    "icon": "📋",
+    "description": "按时间范围 + 客户号 / 账号 / 户名 查询交易流水，结果可下载",
+    "sheet_name": "交易查询结果",
+    "inceptor": "inceptor",
+    "empty_message": "未查询到符合条件的交易记录，请调整查询条件后重试。",
+    "result_count_label": "交易记录",
+    "keyword_placeholder": "请输入客户号、账号或户名",
+    "keyword_required": true,
+    "date_range": true,
+    "search_fields": [
+        {"value": "a.cst_accno",   "label": "按账号"},
+        {"value": "a.cst_id",  "label": "按客户号"},
+        {"value": "b.accno_nm", "label": "按户名"}
+    ],
+    "columns": [
+        {"key": "数据日期",    "label": "数据日期"},
+{"key": "客户账号",    "label": "客户账号"},
+{"key": "账户名",    "label": "账户名"},
+{"key": "交易日期",    "label": "交易日期"},
+{"key": "客户编号",    "label": "客户编号"},
+{"key": "交易备注",    "label": "交易备注"},
+{"key": "摘要代码",    "label": "摘要代码"},
+{"key": "摘要",    "label": "摘要"},
+{"key": "交易本地日期",    "label": "交易本地日期"},
+{"key": "交易本地时间",    "label": "交易本地时间"},
+{"key": "存款借方发生额",    "label": "存款借方发生额"},
+{"key": "存款贷方发生额",    "label": "存款贷方发生额"},
+{"key": "存款交易金额",    "label": "存款交易金额"},
+{"key": "存款账户余额",    "label": "存款账户余额"},
+{"key": "交易资金用途代码",    "label": "交易资金用途代码"},
+{"key": "交易资金用途备注",    "label": "交易资金用途备注"},
+{"key": "对方记账账号",    "label": "对方记账账号"},
+{"key": "对方记账账号名称",    "label": "对方记账账号名称"},
+{"key": "对方记账行号",    "label": "对方记账行号"},
+{"key": "对方交易账号",    "label": "对方交易账号"},
+{"key": "对方交易账号名称",    "label": "对方交易账号名称"},
+{"key": "对方交易支付行号",    "label": "对方交易支付行号"},
+{"key": "对方交易行名",    "label": "对方交易行名"}
+
+
+    ]
+}

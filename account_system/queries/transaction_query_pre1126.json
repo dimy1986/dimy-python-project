@@ -3,7 +3,7 @@
     "icon": "📋",
     "description": "按时间范围 + 客户号或账号查询 cdm_td_vchr_seri_hs 交易流水，结果可下载",
     "sheet_name": "交易查询pre1126",
-    "inceptor": "inceptor",
+    "inceptor": "inceptor2",
     "empty_message": "未查询到符合条件的交易记录，请调整查询条件后重试。",
     "result_count_label": "交易记录",
     "keyword_placeholder": "请输入客户号或账号（精确匹配）",
