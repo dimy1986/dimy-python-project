@@ -12,12 +12,42 @@ import os
 import re
 import sqlite3
 import sys
+import time
 from typing import Any, Dict, Generator, List, Optional
 
 from pyhive import hive
 from sshtunnel import SSHTunnelForwarder
+import threading
 from werkzeug.security import check_password_hash, generate_password_hash
 
+
+import socket
+
+_last_query_time = 0  # 记录最后一次查询的时间
+_tunnel_cleanup_thread = None
+
+def _is_port_open(port: int) -> bool:
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=2):
+            return True
+    except:
+        return False
+
+def _is_tunnel_alive(section: str) -> bool:
+    global _shared_tunnel, _section_port_map
+
+    if _shared_tunnel is None:
+        return False
+
+    if not _shared_tunnel.is_active:
+        return False
+
+    if section not in _section_port_map:
+        return False
+
+    port = _section_port_map[section]
+
+    return _is_port_open(port)
 
 # ──────────────────────────── 路径解析 ────────────────────────────
 
@@ -231,6 +261,7 @@ def load_query(name: str) -> str:
 # 导致 "Could not establish session to SSH gateway" 错误。
 _shared_tunnel: Optional[SSHTunnelForwarder] = None
 _section_port_map: Dict[str, int] = {}     # section 名 → 本地已绑定端口
+_tunnel_lock = threading.Lock()
 
 
 def _inceptor_sections(cfg: configparser.ConfigParser) -> List[str]:
@@ -239,68 +270,72 @@ def _inceptor_sections(cfg: configparser.ConfigParser) -> List[str]:
 
 
 def start_tunnel(section: str = "inceptor") -> int:
-    """
-    确保到所有 Inceptor 节点的 SSH 隧道已就绪，返回指定节点的本地绑定端口。
-    所有节点共用同一条 SSH 连接（单个 SSHTunnelForwarder + 多个 remote_bind_addresses），
-    避免对跳板机建立多条并发 SSH 连接。
-
-    :param section: config.ini 中对应 Inceptor 节点的 section 名，默认为 "inceptor"。
-    """
     global _shared_tunnel, _section_port_map
 
-    # 隧道活跃且已有映射，直接返回
-    if _shared_tunnel is not None and _shared_tunnel.is_active:
-        if section in _section_port_map:
+    # 快速路径（已有直接返回）
+    if _is_tunnel_alive(section):
+        return _section_port_map[section]
+
+    with _tunnel_lock:
+        if _is_tunnel_alive(section):
             return _section_port_map[section]
 
-    cfg = _load_config()
-    if not cfg.has_section(section):
-        raise ValueError(
-            f"config.ini 中未找到节点 [{section}]，"
-            f"请参照 config.ini.example 添加该节点的配置。"
-        )
+        # 走到这里说明隧道不可用 → 强制重建
+        if _shared_tunnel is not None:
+            print("SSH tunnel失效，准备重建")
+            try:
+                _shared_tunnel.stop()
+            except Exception as e:
+                print(f"stop tunnel异常: {e}")
+            finally:
+                _shared_tunnel = None
+                _section_port_map.clear()
 
-    # 关闭旧隧道（如有）
-    if _shared_tunnel is not None:
-        try:
-            _shared_tunnel.stop()
-        except Exception:
-            pass
+        cfg = _load_config()
+        if not cfg.has_section(section):
+            raise ValueError(
+                f"config.ini 中未找到节点 [{section}]"
+            )
 
-    ssh_host = cfg.get("ssh", "host")
-    ssh_port = cfg.getint("ssh", "port", fallback=22)
-    ssh_user = cfg.get("ssh", "username")
-    ssh_pass = cfg.get("ssh", "password")
+        ssh_host = cfg.get("ssh", "host")
+        ssh_port = cfg.getint("ssh", "port", fallback=22)
+        ssh_user = cfg.get("ssh", "username")
+        ssh_pass = cfg.get("ssh", "password")
 
-    sections = _inceptor_sections(cfg)
-    remote_binds = [
-        (cfg.get(s, "host"), cfg.getint(s, "port"))
-        for s in sections
-    ]
-    local_binds = [
-        ("127.0.0.1", cfg.getint(s, "local_port", fallback=9999))
-        for s in sections
-    ]
+        sections = _inceptor_sections(cfg)
 
-    _shared_tunnel = SSHTunnelForwarder(
-        (ssh_host, ssh_port),
-        ssh_username=ssh_user,
-        ssh_password=ssh_pass,
-        remote_bind_addresses=remote_binds,
-        local_bind_addresses=local_binds,
-    )
-    _shared_tunnel.start()
+        remote_binds = [
+            (cfg.get(s, "host"), cfg.getint(s, "port"))
+            for s in sections
+        ]
+        local_binds = [
+            ("127.0.0.1", cfg.getint(s, "local_port", fallback=9999))
+            for s in sections
+        ]
 
-    _section_port_map = {
-        s: _shared_tunnel.local_bind_ports[i]
-        for i, s in enumerate(sections)
-    }
+        # ❗关键：只在没有 tunnel 或失效时创建
+        if _shared_tunnel is None or not _shared_tunnel.is_active:
+            _shared_tunnel = SSHTunnelForwarder(
+                (ssh_host, ssh_port),
+                ssh_username=ssh_user,
+                ssh_password=ssh_pass,
+                remote_bind_addresses=remote_binds,
+                local_bind_addresses=local_binds,
+                set_keepalive=30  # 非常关键
+            )
+            _shared_tunnel.start()
 
-    if section not in _section_port_map:
-        raise ValueError(
-            f"节点 [{section}] 的端口映射未建立，请检查 config.ini 配置。"
-        )
-    return _section_port_map[section]
+            _section_port_map = {
+                s: _shared_tunnel.local_bind_ports[i]
+                for i, s in enumerate(sections)
+            }
+
+            print("SSH tunnel started")
+
+        if section not in _section_port_map:
+            raise ValueError(f"节点 [{section}] 未建立映射")
+
+        return _section_port_map[section]
 
 
 def stop_tunnel() -> None:
@@ -357,6 +392,8 @@ def query_db(
     :param params: 对应 SQL 中每个 %s 的参数元组
     :returns:      查询结果，每行为一个字典
     """
+    global _last_query_time
+    _last_query_time = time.time()  # ← 记录查询时间
     cursor = conn.cursor()
     # pyhive 内部用 Python 的 % 格式化来替换 %s 占位符。
     # SQL 注释（-- ...）中常含有 "%s" 说明文字和 "%张三%" 通配符示例，
@@ -401,6 +438,9 @@ def iter_query_db(
     :param chunk_size: 每次 fetchmany 拉取的行数，默认 2000
     :yields:           每行数据字典
     """
+    global _last_query_time
+    _last_query_time = time.time()  # ← 记录查询时间
+
     cursor = conn.cursor()
     sql_exec = re.sub(r"--[^\n]*", "", sql)
     if params:
@@ -421,3 +461,32 @@ def iter_query_db(
         for row in batch:
             yield dict(zip(columns, row))
 
+
+def _tunnel_cleanup_worker():
+    """
+    后台线程：定期检查隧道是否空闲。
+    若超过 3 分钟无查询则自动关闭隧道。
+    """
+    global _shared_tunnel, _last_query_time
+
+    print("[INFO] Tunnel cleanup worker started (idle timeout: 300s)")
+
+    while True:
+        try:
+            time.sleep(60)  # 每 60 秒检查一次
+
+            if _shared_tunnel is None or not _shared_tunnel.is_active:
+                continue
+
+            current_time = time.time()
+            idle_time = current_time - _last_query_time
+
+            if idle_time > 150:  # 3 分钟 = 130 秒
+                print(f"[INFO] SSH tunnel idle for {int(idle_time / 60)} minutes, closing...")
+                try:
+                    stop_tunnel()
+                    print("[INFO] SSH tunnel closed successfully")
+                except Exception as e:
+                    print(f"[ERROR] Failed to close tunnel: {e}")
+        except Exception as e:
+            print(f"[ERROR] Tunnel cleanup worker error: {e}")

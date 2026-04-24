@@ -11,7 +11,7 @@ SQL 查询语句由 queries/*.sql 文件提供，不在代码中写死。
 新增查询只需在 queries/ 目录下放入 <name>.sql 和 <name>.json，
 无需修改本文件。
 """
-
+from database import _tunnel_cleanup_worker
 import atexit
 import datetime
 import decimal
@@ -20,8 +20,12 @@ import os
 import sys
 import tempfile
 import threading
+_download_semaphore = threading.Semaphore(5)
 import webbrowser
-
+from flask import Response
+import csv
+import io
+import tempfile, os
 import xlsxwriter
 from flask import (
     Flask,
@@ -425,6 +429,160 @@ def _make_download_view(query_id: str, cfg: dict):
     download.__name__ = f"{query_id}_download"
     return download
 
+def _make_download_view_stream(query_id: str, cfg: dict):
+
+
+    allowlist = {sf["value"] for sf in cfg["search_fields"]}
+    default_field = cfg["search_fields"][0]["value"]
+    inceptor = cfg.get("inceptor", "inceptor")
+
+    def download():
+        with _download_semaphore:
+
+            keyword = request.form.get("keyword", "").strip()
+            search_type = request.form.get("search_type", default_field)
+            date_from = request.form.get("date_from", "").strip()
+            date_to = request.form.get("date_to", "").strip()
+            file_format = request.form.get("format", "csv").lower()
+
+            field = search_type if search_type in allowlist else default_field
+            sql = load_query(query_id).format(field=field)
+            params = _build_params(cfg, keyword, date_from, date_to)
+
+            # ==========================================================
+            # ✅ CSV（保持你原逻辑）
+            # ==========================================================
+            if file_format == "csv":
+
+                conn = get_db(inceptor)
+
+                def generate():
+                    output = io.StringIO()
+                    writer = csv.writer(output)
+
+                    yield "\ufeff"
+
+                    first = True
+                    row_count = 0
+                    buffer_limit = 100
+
+                    try:
+                        for record in iter_query_db(conn, sql, params):
+                            if first:
+                                writer.writerow(record.keys())
+                                first = False
+
+                            row = ["" if v is None else str(v) for v in record.values()]
+                            writer.writerow(row)
+                            row_count += 1
+
+                            if row_count % buffer_limit == 0:
+                                yield output.getvalue()
+                                output.seek(0)
+                                output.truncate(0)
+
+                        if output.tell() > 0:
+                            yield output.getvalue()
+
+                        if row_count == 0:
+                            writer.writerow(["无数据"])
+                            yield output.getvalue()
+
+                    except Exception as e:
+                        import traceback
+                        print("下载异常:", e)
+                        traceback.print_exc()
+
+                    finally:
+                        conn.close()   # ✅ 正确位置（generator 内）
+
+                return Response(
+                    generate(),
+                    mimetype="text/csv; charset=utf-8",
+                    headers={
+                        "Content-Disposition": f"attachment; filename={query_id}.csv",
+                        "Cache-Control": "no-cache, no-store, must-revalidate",
+                        "Pragma": "no-cache",
+                        "Expires": "0"
+                    }
+                )
+
+            # ==========================================================
+            # 🔥 Excel（已替换为高性能版本）
+            # ==========================================================
+            elif file_format == "xlsx":
+
+
+
+                sheet = cfg.get("sheet_name", "查询结果")
+
+                tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx")
+                tmp_path = tmp.name
+                tmp.close()
+
+                conn = get_db(inceptor)
+
+                try:
+                    workbook = xlsxwriter.Workbook(tmp_path, {"constant_memory": True})
+                    worksheet = workbook.add_worksheet(sheet[:31])
+
+                    headers_written = False
+                    row_idx = 0
+
+                    for record in iter_query_db(conn, sql, params):
+
+                        if not headers_written:
+                            for col_idx, key in enumerate(record.keys()):
+                                worksheet.write(0, col_idx, key)
+                            headers_written = True
+                            row_idx = 1
+
+                        for col_idx, value in enumerate(record.values()):
+                            worksheet.write(
+                                row_idx,
+                                col_idx,
+                                "" if value is None else str(value)
+                            )
+
+                        row_idx += 1
+
+                    if not headers_written:
+                        worksheet.write(0, 0, "无数据")
+
+                    workbook.close()
+
+                    response = send_file(
+                        tmp_path,
+                        as_attachment=True,
+                        download_name=f"{query_id}.xlsx"
+                    )
+
+                    @response.call_on_close
+                    def cleanup():
+                        try:
+                            os.unlink(tmp_path)
+                        except:
+                            pass
+
+                    return response
+
+                except Exception as e:
+                    import traceback
+                    print("Excel下载异常:", e)
+                    traceback.print_exc()
+                    return "导出失败", 500
+
+                finally:
+                    conn.close()   # ✅ 必须在外层 finally
+
+            # ==========================================================
+            # ❌ 不支持格式
+            # ==========================================================
+            else:
+                return "不支持的格式", 400
+
+    download.__name__ = f"{query_id}_download_stream"
+    return download
 
 def _make_api_view(query_id: str, cfg: dict):
     """为指定查询 ID 生成 AJAX JSON API 路由处理函数（POST）。"""
@@ -491,7 +649,7 @@ for _qid, _cfg in _query_configs.items():
     app.add_url_rule(
         f"/{_qid}/download",
         endpoint=f"{_qid}_download",
-        view_func=_make_download_view(_qid, _cfg),
+        view_func=_make_download_view_stream(_qid, _cfg),
         methods=["POST"],
     )
     app.add_url_rule(
@@ -506,12 +664,20 @@ for _qid, _cfg in _query_configs.items():
 
 if __name__ == "__main__":
     # 启动 SSH 隧道（失败时给出清晰提示后退出）
-    try:
-        local_port = start_tunnel()
-        print(f"SSH 隧道已建立，本地端口: {local_port}")
-    except Exception as exc:
-        print(f"[错误] SSH 隧道启动失败: {exc}")
-        sys.exit(1)
+    # try:
+    #     local_port = start_tunnel()
+    #     print(f"SSH 隧道已建立，本地端口: {local_port}")
+    # except Exception as exc:
+    #     print(f"[错误] SSH 隧道启动失败: {exc}")
+    #     sys.exit(1)
+
+    # 启动隧道清理线程（空闲 3 分钟后自动关闭）
+
+
+    cleanup_thread = threading.Thread(target=_tunnel_cleanup_worker, daemon=True)
+    cleanup_thread.start()
+    # ✅ 改这里：不在启动时强制建立隧道
+    print("程序启动，不预先建立 SSH 隧道")
 
     # 注册退出时关闭隧道
     atexit.register(stop_tunnel)
