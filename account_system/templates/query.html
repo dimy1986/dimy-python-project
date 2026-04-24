@@ -163,7 +163,7 @@
 
     var warning = total > PAGE_LIMIT
       ? '<div class="alert alert-warning" style="margin-bottom:12px;">⚠ 结果超过 ' + PAGE_LIMIT
-        + ' 条，页面仅显示前 ' + PAGE_LIMIT + ' 条记录，完整数据请点击右上角「下载 Excel」。</div>'
+        + ' 条，页面仅显示前 ' + PAGE_LIMIT + ' 条记录，完整数据请点击右上角「下载 CSV / Excel」。如超过1万条建议下载csv格式</div>'
       : '';
 
     var thHtml = COLUMNS.map(function (c) { return '<th>' + esc(c.label) + '</th>'; }).join('');
@@ -179,8 +179,10 @@
     container.innerHTML =
         '<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">'
       + '  <div class="result-info">共找到 <span>' + total + '</span> 条' + RESULT_LABEL + dateInfo + '</div>'
-      + '  <form method="POST" action="' + DOWNLOAD_URL + '">' + hidden
-      + '    <button type="submit" class="btn btn-success">⬇ 下载 Excel</button>'
+      + '  <form method="POST" action="' + DOWNLOAD_URL + '" style="display:flex; gap:8px;">'
+      + hidden
+      + '    <button type="submit" name="format" value="csv" class="btn btn-secondary">⬇ CSV</button>'
+      + '    <button type="submit" name="format" value="xlsx" class="btn btn-success">⬇ Excel</button>'
       + '  </form>'
       + '</div>'
       + warning
@@ -203,37 +205,16 @@
     el.style.display = text ? '' : 'none';
   }
 
-  /* ── 将表单当前值写入 sessionStorage（可带 pending 标志）── */
-  function saveFormToCache(pending) {
-    var kw = document.getElementById('f-keyword');
-    var st = document.getElementById('f-search-type');
-    var entry = {
-      keyword:     kw ? kw.value : '',
-      search_type: st ? st.value : '',
-      pending:     !!pending
-    };
-    if (HAS_DATE_RANGE) {
-      var df = document.getElementById('f-date-from');
-      var dt = document.getElementById('f-date-to');
-      entry.date_from = df ? df.value : '';
-      entry.date_to   = dt ? dt.value : '';
-    }
-    try { sessionStorage.setItem(CACHE_KEY, JSON.stringify(entry)); } catch (e) {
-      console.warn('sessionStorage write failed:', e);
-    }
-  }
+  /* ── 表单提交（AJAX）── */
+  document.getElementById('query-form').addEventListener('submit', function (e) {
+    e.preventDefault();
 
-  /* ── 发起 AJAX 查询 ── */
-  function doQuery() {
     var btn = document.getElementById('search-btn');
     btn.disabled = true;
     btn.textContent = '🔄 查询中…';
     setStatus('查询中，请稍候…', '#e67e22');
 
-    /* 立即保存表单参数，pending=true；防止查询期间切换页面后参数丢失 */
-    saveFormToCache(true);
-
-    var formData = new FormData(document.getElementById('query-form'));
+    var formData = new FormData(this);
 
     fetch(API_URL, { method: 'POST', body: formData })
       .then(function (res) {
@@ -241,7 +222,7 @@
         return res.json();
       })
       .then(function (data) {
-        /* 查询成功，缓存完整结果，pending=false */
+        /* 缓存到 sessionStorage 供切换页面后恢复 */
         try { sessionStorage.setItem(CACHE_KEY, JSON.stringify(data)); } catch (cacheErr) {
           console.warn('sessionStorage write failed:', cacheErr);
         }
@@ -262,62 +243,36 @@
         btn.disabled = false;
         btn.textContent = '🔍 查询';
       });
-  }
-
-  /* ── 表单提交（AJAX）── */
-  document.getElementById('query-form').addEventListener('submit', function (e) {
-    e.preventDefault();
-    doQuery();
   });
 
-  /* ── 从 sessionStorage 恢复表单与结果（初次加载 + bfcache 恢复均调用）── */
-  function restoreFromCache() {
-    try {
-      var raw = sessionStorage.getItem(CACHE_KEY);
-      if (!raw) return;
-      var cached = JSON.parse(raw);
+  /* ── 页面加载：从 sessionStorage 同步恢复结果（脚本在页面底部，DOM 已就绪）── */
+  try {
+    var _raw = sessionStorage.getItem(CACHE_KEY);
+    if (_raw) {
+      var _cached = JSON.parse(_raw);
 
       /* 恢复表单输入值 */
-      var kw = document.getElementById('f-keyword');
-      var st = document.getElementById('f-search-type');
-      if (kw && cached.keyword)     kw.value = cached.keyword;
-      if (st && cached.search_type) st.value = cached.search_type;
+      var _kw = document.getElementById('f-keyword');
+      var _st = document.getElementById('f-search-type');
+      if (_kw && _cached.keyword)     _kw.value = _cached.keyword;
+      if (_st && _cached.search_type) _st.value = _cached.search_type;
       if (HAS_DATE_RANGE) {
-        var df = document.getElementById('f-date-from');
-        var dt = document.getElementById('f-date-to');
-        if (df && cached.date_from) df.value = cached.date_from;
-        if (dt && cached.date_to)   dt.value = cached.date_to;
+        var _df = document.getElementById('f-date-from');
+        var _dt = document.getElementById('f-date-to');
+        if (_df && _cached.date_from) _df.value = _cached.date_from;
+        if (_dt && _cached.date_to)   _dt.value = _cached.date_to;
       }
 
-      if (cached.pending) {
-        /* 上次查询在进行中时离开了页面（含 bfcache 恢复场景）
-           重置按钮状态（bfcache 下按钮可能仍处于禁用态），然后重新发起查询 */
-        var btn = document.getElementById('search-btn');
-        btn.disabled = false;
-        btn.textContent = '🔍 查询';
-        setStatus('', '');
-        doQuery();
-      } else {
-        /* 渲染缓存的查询结果 */
-        renderResults(cached);
-        if (!cached.error) {
-          setStatus('✅ 查询完成，共 ' + cached.total_count + ' 条记录', '#27ae60');
-        }
+      /* 渲染缓存的查询结果 */
+      renderResults(_cached);
+
+      if (!_cached.error) {
+        setStatus('✅ 查询完成，共 ' + _cached.total_count + ' 条记录', '#27ae60');
       }
-    } catch (restoreErr) {
-      console.warn('sessionStorage restore failed:', restoreErr);
     }
+  } catch (restoreErr) {
+    console.warn('sessionStorage restore failed:', restoreErr);
   }
-
-  /* 初次加载时恢复 */
-  restoreFromCache();
-
-  /* bfcache 恢复（浏览器前进/后退键）时重新触发，避免 fetch 被丢弃后页面卡住 */
-  window.addEventListener('pageshow', function (evt) {
-    if (evt.persisted) {
-      restoreFromCache();
-    }
-  });
 
 })();
 </script>
